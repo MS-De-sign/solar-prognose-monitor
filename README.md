@@ -109,6 +109,16 @@ An die Rundsteuer-Eingänge dürfen ausschließlich potentialfreie Kontakte gege
 
 Installation, Konfiguration und Nutzung dieser Software erfolgen vollständig auf eigene Gefahr. Die Software wird ohne jegliche ausdrückliche oder stillschweigende Gewährleistung bereitgestellt. Insbesondere wird keine Gewähr für Eignung, Fehlerfreiheit, Anlagenkompatibilität, Betriebssicherheit oder das Ausbleiben von Schäden übernommen. Arbeiten an Netzspannung und leistungsführenden Anlagenteilen dürfen nur durch entsprechend qualifizierte Fachkräfte erfolgen.
 
+## Projekt unterstützen ☕
+
+Wenn dir der Solar Prognose Monitor hilft und du die weitere Entwicklung freiwillig unterstützen möchtest, kannst du über PayPal einen Kaffee ausgeben:
+
+[**☕ Über PayPal einen Kaffee ausgeben**](https://www.paypal.com/ncp/payment/MZDYMZH5EHY2Y)
+
+Alternativ kannst du in PayPal unter **Geld senden** die Adresse `info@ms-de-sign.de` als Empfänger eintragen.
+
+Die Unterstützung ist freiwillig und begründet keinen Anspruch auf Gegenleistung, Support, zusätzliche Funktionen, Lizenzrechte oder bevorzugte Bearbeitung. Es handelt sich nicht um eine steuerlich abzugsfähige Spende; eine Zuwendungsbestätigung wird nicht ausgestellt.
+
 ## Licensing
 
 Copyright (C) 2026 Marcus Sonntag / [MS-De-sign](https://github.com/MS-De-sign).
@@ -118,8 +128,6 @@ Die aktuelle Fassung des Solar Prognose Monitors ist **source-available** unter 
 Kommerzielle oder gewerbliche Nutzung benötigt vorab eine separate schriftliche Genehmigung oder Lizenzvereinbarung. Dazu gehören insbesondere der Verkauf von Hardware mit vorinstallierter Software, die Integration in kommerzielle Produkte und kostenpflichtige Dienstleistungen auf Grundlage der Software. Individuelle Genehmigungen – auch ohne Lizenzgebühr – bleiben möglich. Weitere Hinweise stehen unter [Commercial Licensing](COMMERCIAL-LICENSE.md).
 
 Bei jeder Weitergabe müssen der Lizenztext und die in [`NOTICE`](NOTICE) enthaltene `Required Notice` erhalten bleiben. Die Softwarelizenz gewährt keine Rechte an Projektname, Logo, Grafiken oder anderem Branding, soweit solche Rechte nicht ausdrücklich separat eingeräumt wurden.
-
-Bereits unter einer früheren Lizenz veröffentlichte Versionen bleiben für deren Empfänger unter den damals erteilten Rechten nutzbar. Die neue Lizenzierung gilt für diese und nachfolgende Veröffentlichungen ab der Umstellung.
 
 ### Disclaimer
 
