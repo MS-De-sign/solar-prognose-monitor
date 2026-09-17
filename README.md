@@ -115,7 +115,6 @@ Wenn dir der Solar Prognose Monitor hilft und du die weitere Entwicklung freiwil
 
 [**☕ Über PayPal einen Kaffee ausgeben**](https://www.paypal.com/ncp/payment/MZDYMZH5EHY2Y)
 
-Alternativ kannst du in PayPal unter **Geld senden** die Adresse `info@ms-de-sign.de` als Empfänger eintragen.
 
 Die Unterstützung ist freiwillig und begründet keinen Anspruch auf Gegenleistung, Support, zusätzliche Funktionen, Lizenzrechte oder bevorzugte Bearbeitung. Es handelt sich nicht um eine steuerlich abzugsfähige Spende; eine Zuwendungsbestätigung wird nicht ausgestellt.
 
