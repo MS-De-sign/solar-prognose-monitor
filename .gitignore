@@ -1,0 +1,20 @@
+# Lokale Arduino-Builds und installierte Toolchains
+/work/
+/output/
+/tools/
+/dist/
+
+# Heruntergeladene Registerlisten und temporäre Arbeitsdateien
+/tmp/
+
+# Arduino-/Editor-Reste
+build/
+*.elf
+*.map
+*.log
+.vscode/
+.idea/
+
+# Betriebssystemdateien
+Thumbs.db
+.DS_Store
