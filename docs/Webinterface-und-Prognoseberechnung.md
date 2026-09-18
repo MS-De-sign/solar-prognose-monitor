@@ -200,6 +200,8 @@ RX, TX, DE/RE, aktive Stufen und Rundsteuer-Eingänge dürfen keinen GPIO doppel
 | Lernrate Lastprofil | Gewicht einer neuen Beobachtung gegenüber dem bereits gespeicherten Profil. |
 | Schwelle Großlast | Mehrleistung über der Grundlast, ab der ein separates wiederkehrendes Ereignis gelernt wird. |
 
+> **Wartung und Inbetriebnahme:** Vor Wartungs-, Service-, Umbau- oder Inbetriebnahmearbeiten an Wechselrichter oder Batteriesystem auf **Bypass** umschalten und die Einstellung speichern. Im Bypass wird der Max-SOC einmal geschrieben und geprüft; danach erfolgen keine regelmäßigen Eingriffe. Besonders wichtig ist dies bei einer Batterieerweiterung, weil das Batteriesystem neue Module während der Angleichung automatisch bis ungefähr 40 % laden oder entladen kann. Während der Arbeiten Max-SOC und Betriebsart nicht erneut ändern. Prognose erst nach vollständig abgeschlossenen und durch den Fachbetrieb freigegebenen Arbeiten wieder aktivieren. Hersteller- und Fachbetriebsvorgaben haben immer Vorrang.
+
 ### Dachflächen 1 bis 4
 
 Jede Fläche kann einzeln aktiviert und benannt werden. Einzutragen sind die tatsächlich installierten kWp, die Modulneigung und die Open-Meteo-Ausrichtung: 0° Süd, −90° Ost, +90° West und ±180° Nord. Die Vorhersageleistung aller aktivierten Flächen wird addiert.

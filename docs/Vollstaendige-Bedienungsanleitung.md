@@ -187,6 +187,12 @@ Der Verlauf schreibt alle fünf Minuten einen kompakten Messpunkt in eine Tagesd
 | Lernrate Lastprofil | Gewicht einer neuen Beobachtung gegenüber dem gespeicherten Wert. |
 | Schwelle wiederkehrende Großlast | Mehrleistung über der Grundlast, ab der ein separates Ereignis wie regelmäßiges Autoladen gelernt wird. |
 
+#### Wartungsarbeiten und Batterieerweiterung
+
+Vor Wartungs-, Service-, Umbau- oder Inbetriebnahmearbeiten an Wechselrichter oder Batteriesystem muss die Betriebsart auf **Bypass aktiv** gestellt und mit **Speichern und neu starten** übernommen werden. Dadurch darf die Prognoseregelung keine wiederholten Max-SOC-Freigaben mehr ausführen, während ein Fachbetrieb Einstellungen ändert, Komponenten prüft oder herstellerspezifische Serviceabläufe durchführt.
+
+Besonders wichtig ist dies beim Einbau oder bei der Inbetriebnahme zusätzlicher Batteriemodule. Das Batteriesystem kann für die vorgeschriebene Angleichung automatisch bis ungefähr 40 % laden oder entladen. Die Prognoseregelung darf diesen Vorgang nicht beeinflussen. Im Bypass schreibt der Solar Prognose Monitor den eingestellten Max-SOC einmalig und prüft ihn durch Rücklesen. Nach Abschluss dieses Einmalauftrags erfolgen keine regelmäßigen Max-SOC-Schreibzugriffe mehr. Während der Arbeiten weder den konfigurierten Max-SOC ändern noch erneut zwischen Prognose und Bypass umschalten, weil dadurch ein neuer Schreibauftrag entstehen kann. Erst wenn sämtliche Wartungs-, Erweiterungs-, Angleichungs- und Inbetriebnahmeprozeduren vollständig beendet und durch den Fachbetrieb freigegeben sind, darf wieder auf **Prognose aktiv** umgestellt werden. Herstelleranleitung und Vorgaben des ausführenden Fachbetriebs haben immer Vorrang.
+
 ### Dachflächen 1 bis 4
 
 | Feld je Dachfläche | Wirkung |

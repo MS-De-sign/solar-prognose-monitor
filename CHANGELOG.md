@@ -1,5 +1,9 @@
 # Versionsverlauf
 
+## Unveröffentlicht
+
+- ergänzt einen deutlich sichtbaren Hinweis, vor Wartungs-, Service- und Inbetriebnahmearbeiten auf Bypass umzuschalten; Batterieerweiterungen und deren automatische Lade-/Entladeprozedur werden als besonders wichtiges Beispiel genannt
+
 ## 1.0.1 – 2026-09-18
 
 - korrigiert die USB-Erstinstallation auf einem frischen ESP32: Die App-Partition beginnt nun passend zum ESP32 Arduino Core 3.3.8 bei `0x10000`
