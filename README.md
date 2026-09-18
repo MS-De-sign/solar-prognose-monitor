@@ -16,7 +16,7 @@ Der Hausverbrauch wird für jeden Wochentag in 15-Minuten-Blöcken gelernt. Wied
 
 Die Steuerung gibt den zulässigen Ladezielwert schrittweise frei. Bei einer unerwarteten Wolkenphase wartet sie nicht auf eine verpasste Zwischenstufe, sondern wechselt auf den zur aktuellen Uhrzeit vorgesehenen Wert. Zusätzlich prüft sie, welcher Batteriestand mindestens freigegeben werden muss, damit das Tagesziel mit der noch erwarteten Energie erreichbar bleibt. Sicherheitsreserve, gewünschtes Ladeende und Schrittweite lassen sich einstellen. Da Wetter- und Verbrauchsprognosen nie vollkommen exakt sind, ersetzt das System keine Anlagenüberwachung und sollte bei der ersten Inbetriebnahme kontrolliert werden.
 
-Aktuelle Version: **1.0.0**
+Aktuelle Version: **1.0.1**
 
 ## Funktionen
 
@@ -79,16 +79,20 @@ Der Sketch verwendet ausschließlich Bibliotheken aus dem ESP32-Core.
 Für einen reproduzierbaren Build beider Varianten im Projektordner ausführen:
 
 ```powershell
-.\scripts\build-release.ps1 -Version 1.0.0
+.\scripts\build-release.ps1 -Version 1.0.1
 ```
 
-Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.0.0`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
+Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.0.1`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
 
 ### Erstinstallation der Partitionstabelle
 
-Die erstmalige Übernahme der mitgelieferten Partitionstabelle muss per USB erfolgen; ein Browserupdate allein kann keine Partitionstabelle ersetzen. In der Arduino IDE muss **Erase All Flash Before Sketch Upload: Disabled** bleiben, wenn Daten einer kompatiblen Vorversion übernommen werden sollen. Die bestehende 20-KB-System-NVS bleibt dadurch an derselben Adresse erhalten. Ein vorhandenes Lastprofil wird in die zusätzliche 64-KB-Profil-NVS und ein kompatibler 24-Stunden-Verlauf in LittleFS übertragen; die alten Blöcke werden erst nach erfolgreicher Rückleseprüfung entfernt. Eine `USB-Komplett`-/Factory-Datei löscht dagegen alle alten Daten und ist nur für Neuinstallationen bestimmt. Geräte, auf denen diese Partitionierung bereits eingerichtet ist, können die normale Update-Datei über den Browser erhalten.
+**Wichtig:** Version 1.0.0 ist für die Erstinstallation auf einem frischen ESP32 nicht verwendbar. Ihre Partitionstabelle erwartete das Programm bei `0x20000`, während ESP32 Arduino Core 3.3.8 es per USB bei `0x10000` schrieb. Der ESP32 konnte deshalb nicht booten und keinen Access Point starten. Dieser Fehler ist ab Version 1.0.1 behoben.
 
-Anschließend funktionieren Browserupdates innerhalb derselben 4-/8-MB-Variante wieder normal. Die 4-MB-Partition bietet zwei OTA-Slots mit je 1,75 MB und 320 KB LittleFS für 31 Tage Verlauf. Die 8-MB-Variante bietet zwei OTA-Slots mit je 3,5 MB und 832 KB LittleFS.
+Für einen frischen ESP32 das vollständige Repository als ZIP herunterladen, entpacken und in der Arduino IDE `src/Solar_Prognose_Monitor/Solar_Prognose_Monitor.ino` öffnen. Die Dateien `.ino`, `.cpp`, `.h` und `partitions.csv` müssen gemeinsam im Sketchordner bleiben. Die erstmalige Übernahme der mitgelieferten Partitionstabelle muss per USB erfolgen; ein Browserupdate allein kann keine Partitionstabelle ersetzen. Alternativ kann die zur Flashgröße passende `USB-Komplett`-Datei verwendet werden. Sie ist nur für Neuinstallationen bestimmt und löscht vorhandene Daten.
+
+Ein Gerät, auf dem Version 1.0.0 bereits läuft, sollte mit der passenden normalen `Update.bin` über den Browser aktualisiert werden. Dabei bleibt seine vorhandene Partitionstabelle aktiv; Einstellungen, Lernprofil und Verlauf werden nicht allein durch das Programmupdate gelöscht. Die 4-MB- und 8-MB-Varianten dürfen nicht vertauscht werden.
+
+Nach der USB-Erstinstallation funktionieren Browserupdates innerhalb derselben 4-/8-MB-Variante normal. Die 4-MB-Partition bietet zwei OTA-Slots mit je 1,75 MB und 320 KB LittleFS für 31 Tage Verlauf. Die 8-MB-Variante bietet zwei OTA-Slots mit je 3,5 MB und 832 KB LittleFS.
 
 ## Erster Start
 

@@ -1,6 +1,6 @@
 # Vollständige Bedienungsanleitung
 
-Stand: Firmware **1.0.0**
+Stand: Firmware **1.0.1**
 
 Diese Anleitung beschreibt jede Seite und jedes sichtbare Bedien- oder Anzeigefeld des Solar Prognose Monitors. Die mathematischen Hintergründe stehen bewusst gesammelt im letzten Kapitel. Die erste Geräteintegration unterstützt Sungrow-Wechselrichter und -Batteriespeicher.
 
@@ -15,7 +15,7 @@ Diese Anleitung beschreibt jede Seite und jedes sichtbare Bedien- oder Anzeigefe
 
 ## 2. Erster Start und Erreichbarkeit
 
-1. Firmware einschließlich der mitgelieferten Partitionstabelle per USB auf den ESP32 übertragen. Bei einer Datenübernahme aus einer kompatiblen Vorversion muss **Erase All Flash Before Sketch Upload** deaktiviert bleiben. So können Einstellungen, Lernprofil und bisheriger 24-Stunden-Verlauf migriert werden. Eine USB-Komplett-/Factory-Datei ist nur für eine Neuinstallation ohne Datenübernahme vorgesehen.
+1. Firmware einschließlich der mitgelieferten Partitionstabelle per USB auf den ESP32 übertragen. Für einen frischen ESP32 muss Version 1.0.1 oder neuer verwendet werden. Version 1.0.0 kann dort wegen eines falschen App-Offsets in ihrer Partitionstabelle nicht starten. Eine USB-Komplett-/Factory-Datei ist ausschließlich für eine Neuinstallation ohne Datenübernahme vorgesehen.
 2. Mit dem Access Point `Solar-Prognose-XXXXXX` verbinden. Das Standardpasswort lautet `solar123`.
 3. Im Browser `http://192.168.4.1` öffnen.
 4. Unter **Einstellungen** Heim-WLAN, Modbus und Anlagendaten eintragen.
@@ -247,7 +247,7 @@ Nur aktivierte Stufen werden in Nummernreihenfolge addiert. Sind nur Stufe 1 mit
 | Ergebnis | Meldet Erfolg oder Upload-/Schreibfehler. Nach Erfolg startet der ESP32 neu. |
 | Hinweis zur Partitionierung | Erklärt die einmalig erforderliche USB-Installation der Partitionstabelle sowie die automatische Datenmigration bei deaktiviertem vollständigem Löschen. |
 
-ArduinoOTA ist nicht enthalten. Das Browserupdate bleibt nach der einmaligen USB-Erstinstallation der vorgesehene Netzwerk-Updateweg. Ein Update ersetzt das Programm, nicht die normal gespeicherten Einstellungen, Lastprofildaten und Verlaufsdateien. Vor jedem Update werden Lernprofil und Verlauf geprüft. Schlägt das fehl, bricht das Update im Normalfall ab. Die Notfallfreigabe verhindert einen Wartungs-Lockout, kann aber den Verlust der nicht bestätigten Daten nicht verhindern. 4- und 8-MB-Firmware sowie unterschiedliche Partitionsschemata dürfen nicht vertauscht werden.
+ArduinoOTA ist nicht enthalten. Das Browserupdate bleibt nach der einmaligen USB-Erstinstallation der vorgesehene Netzwerk-Updateweg. Version 1.0.0 darf nicht zur Erstinstallation auf einem frischen ESP32 verwendet werden: Ihre Partitionstabelle erwartete die App bei `0x20000`, der ESP32 Arduino Core 3.3.8 schrieb sie jedoch bei `0x10000`. Ab Version 1.0.1 stimmen Upload- und Partitionsadresse überein. Ein bereits laufendes Gerät wird mit der passenden normalen `Update.bin` über den Browser aktualisiert. Ein Update ersetzt das Programm, nicht die normal gespeicherten Einstellungen, Lastprofildaten und Verlaufsdateien. Vor jedem Update werden Lernprofil und Verlauf geprüft. Schlägt das fehl, bricht das Update im Normalfall ab. Die Notfallfreigabe verhindert einen Wartungs-Lockout, kann aber den Verlust der nicht bestätigten Daten nicht verhindern. 4- und 8-MB-Firmware sowie unterschiedliche Partitionsschemata dürfen nicht vertauscht werden.
 
 ## 10. Tab „About“
 

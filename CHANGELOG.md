@@ -1,5 +1,12 @@
 # Versionsverlauf
 
+## 1.0.1 – 2026-09-18
+
+- korrigiert die USB-Erstinstallation auf einem frischen ESP32: Die App-Partition beginnt nun passend zum ESP32 Arduino Core 3.3.8 bei `0x10000`
+- verschiebt die separate Profil-NVS hinter die beiden OTA-Slots, ohne deren Größe oder den Verlaufsspeicher zu verkleinern
+- ergänzt klare Installationshinweise für Neuinstallationen und bereits laufende Geräte
+- Version 1.0.0 kann auf einem frischen ESP32 nicht starten, weil ihre Partitionstabelle die App bei `0x20000` erwartete, während der Core sie bei `0x10000` schrieb; für Neuinstallationen muss Version 1.0.1 oder neuer verwendet werden
+
 ## 1.0.0 – 2026-09-17
 
 Erste Veröffentlichung des **Solar Prognose Monitors**.

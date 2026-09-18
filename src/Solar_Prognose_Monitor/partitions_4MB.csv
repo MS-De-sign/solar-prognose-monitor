@@ -1,9 +1,9 @@
-# Solar Prognose Monitor 4 MB: bestehende NVS bleibt erhalten, 64 KB Profil-NVS, 2 x 1.75 MB OTA, 320 KB LittleFS
+# Solar Prognose Monitor 4 MB: Standard-App-Offset, 64 KB Profil-NVS, 2 x 1.75 MB OTA, 320 KB LittleFS
 # Name,     Type, SubType, Offset,   Size,     Flags
 nvs,        data, nvs,     0x9000,   0x5000,
 otadata,    data, ota,     0xE000,   0x2000,
-profile,    data, nvs,     0x10000,  0x10000,
-app0,       app,  ota_0,   0x20000,  0x1C0000,
-app1,       app,  ota_1,   0x1E0000, 0x1C0000,
+app0,       app,  ota_0,   0x10000,  0x1C0000,
+app1,       app,  ota_1,   0x1D0000, 0x1C0000,
+profile,    data, nvs,     0x390000, 0x10000,
 history,    data, littlefs,0x3A0000, 0x50000,
 coredump,   data, coredump,0x3F0000, 0x10000,

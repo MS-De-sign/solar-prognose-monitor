@@ -59,7 +59,7 @@
 */
 
 namespace ConfigDefaults {
-constexpr char FIRMWARE_VERSION[] = "1.0.0";
+constexpr char FIRMWARE_VERSION[] = "1.0.1";
 constexpr char MANUFACTURER[] = "MS-De-sign / Marcus Sonntag";
 constexpr char LICENSE_TEXT[] = "PolyForm Noncommercial License 1.0.0";
 constexpr char PROJECT_URL[] = "https://github.com/MS-De-sign/solar-prognose-monitor";
@@ -4142,8 +4142,12 @@ const char ABOUT_HTML[] PROGMEM = R"HTML(
 )HTML";
 
 void handleFirmwarePage() {
+  String page = FPSTR(FIRMWARE_HTML);
+  page.replace(
+      F("Stelle „Erase All Flash Before Sketch Upload“ auf <b>Disabled</b>, damit Einstellungen, Lernprofil und der bisherige 24-Stunden-Verlauf automatisch migriert werden können. Eine USB-Komplett-/Factory-Datei löscht diese Daten und ist nur für Neuinstallationen gedacht."),
+      F("Für eine Neuinstallation auf einem frischen ESP32 ist Version 1.0.1 oder neuer erforderlich; Version 1.0.0 konnte dort wegen eines falschen App-Offsets nicht starten. Eine USB-Komplett-/Factory-Datei ist nur für Neuinstallationen gedacht und löscht vorhandene Daten. Bereits laufende Geräte erhalten die passende normale Update-Datei über diese Seite."));
   addNoCacheHeaders();
-  server.send_P(200, "text/html; charset=utf-8", FIRMWARE_HTML);
+  server.send(200, "text/html; charset=utf-8", page);
 }
 
 void handleAboutPage() {
