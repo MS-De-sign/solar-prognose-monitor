@@ -32,6 +32,7 @@ Aktuelle Version: **1.0.1**
 - aktiver HIGH- oder LOW-Pegel für jeden Rundsteuer-Eingang separat auswählbar
 - Browser-Firmwareupdate mit verifizierter Sicherung von Lernprofil und Verlauf; bewusst bestätigbare Notfallfreigabe bei Speicherproblemen
 - About-Seite mit Firmware-Version, Hersteller, Lizenzstatus und Flashgröße; Web-Debug ist dort integriert
+- optionale Pushover-Meldungen bei ESP32-Start, längerem Modbus-Ausfall und wiederhergestellter Modbus-Verbindung
 - kompatibel mit ESP32 Arduino Core 3.3.8
 - eigene Partitionstabellen für 4 MB und 8 MB: bestehende 20-KB-System-NVS, zusätzliche 64-KB-Profil-NVS, zwei große OTA-Slots und eine separate LittleFS-Verlaufspartition
 - optionale Smart-Meter-Zählerstände 5746 und 5748: nicht unterstützte Register beeinträchtigen die übrige Modbus-Abfrage nicht
@@ -54,6 +55,14 @@ Die technische Umsetzung verwendet Modbus Unit-ID 1 und das Holding-Register fü
 Die Auswertung kann an zwei Empfängerarten angepasst werden. Im **3-Kontakt-Modus** müssen genau drei Eingänge aktiv sein; liegt kein Signal an, gilt dies als 100 %. Im **4-Kontakt-Modus** müssen genau vier Eingänge aktiv sein und einer davon muss ausdrücklich 100 % melden. Ohne Signal bleibt in diesem Modus die letzte Wechselrichtereinstellung unverändert. Sind mehrere Kontakte aktiv, gilt nach zwei Sekunden Entprellzeit der niedrigste Prozentwert.
 
 Aus der aktiven Kontaktstufe und der installierten PV-Leistung ermittelt der ESP32 automatisch die zulässige Einspeiseleistung und überträgt sie geprüft an den Wechselrichter. Die genaue Berechnung, verwendeten Register und Sicherheitslogik stehen in der [vollständigen Bedienungsanleitung](docs/Vollstaendige-Bedienungsanleitung.md).
+
+## Pushover-Benachrichtigungen
+
+Unter **Einstellungen** können optional ein eigener Pushover-Application/API-Token und ein User-/Group-Key hinterlegt werden. Der ESP32 meldet dann einen Start oder Neustart, einen länger als die eingestellte Verzögerung bestehenden Modbus-Ausfall und die anschließende Wiederherstellung. Ein Testknopf prüft die Konfiguration vorab. Fehlgeschlagene Übertragungen werden mit einstellbarem Abstand erneut versucht; Statuswechsel erzeugen jeweils nur eine Meldung.
+
+Die Zugangsdaten bleiben im Einstellungsspeicher des ESP32 und werden nach dem Speichern nicht mehr an den Browser zurückgegeben. Die Übertragung zu `api.pushover.net` erfolgt über HTTPS mit Zertifikatsprüfung. Pushover ist ein externer Dienst; es gelten dessen Konto-, Datenschutz- und Nutzungsvorgaben. Für jede Installation sollte eine eigene Pushover-Anwendung und damit ein eigener Application/API-Token verwendet werden.
+
+Eine sofortige Stromausfallmeldung ist technisch nur möglich, solange ESP32, Router und Internetzugang noch versorgt werden. Nach einem vollständigen Stromausfall meldet sich der ESP32 deshalb erst nach Rückkehr von Strom, WLAN, Internet und gültiger Systemzeit mit der Startmeldung. Die Funktion ersetzt keine zertifizierte Alarm- oder Netzüberwachung.
 
 ## Dateien
 

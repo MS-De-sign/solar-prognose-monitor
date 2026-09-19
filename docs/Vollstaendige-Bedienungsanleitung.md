@@ -142,7 +142,7 @@ Der Verlauf schreibt alle fünf Minuten einen kompakten Messpunkt in eine Tagesd
 
 ## 8. Tab „Einstellungen“
 
-**Speichern und neu starten** legt die Werte dauerhaft ab. Das WLAN-Passwort wird nie zurück in das Formular geschrieben; ein leeres Passwortfeld behält das vorhandene Passwort, solange die SSID nicht geändert wird.
+**Speichern und neu starten** legt die Werte dauerhaft ab. Das WLAN-Passwort sowie Pushover-Token und Pushover-User-Key werden nie zurück in das Formular geschrieben; leere Zugangsdatenfelder behalten den jeweiligen gespeicherten Wert, solange nicht ausdrücklich „löschen“ gewählt wird.
 
 ### WLAN
 
@@ -233,6 +233,27 @@ Bei gleichzeitig aktiven Eingängen gilt immer der kleinste Prozentwert. Erst we
 | EIN-JSON / AUS-JSON | Optionaler Request-Inhalt für PUT oder POST; bei GET ausgeblendet und ignoriert. |
 
 Nur aktivierte Stufen werden in Nummernreihenfolge addiert. Sind nur Stufe 1 mit 1.000 W und Stufe 5 mit 800 W aktiv, lauten die Schwellen 1.000 W und 1.800 W. Zusätzlich gelten 150 W Leistungshysterese und die getrennten Zeitverzögerungen. Fehlt der aktuelle Einspeisewert, werden alle Stufen sicher ausgeschaltet. Fehlgeschlagene API-Aufrufe werden frühestens nach zehn Sekunden erneut versucht.
+
+### Pushover-Benachrichtigungen
+
+| Feld | Wirkung |
+|---|---|
+| Meldungen aktivieren | Schaltet automatische Pushover-Nachrichten ein. Token und User-Key müssen gültig gespeichert sein. |
+| Application/API Token | 30-stelliger Schlüssel einer selbst angelegten Pushover-Anwendung. Ein leeres Feld behält den gespeicherten Wert. Er wird nach dem Speichern nicht mehr angezeigt. |
+| User-/Group-Key | 30-stelliger Empfängerschlüssel des eigenen Pushover-Kontos oder einer Gruppe. Ein leeres Feld behält den gespeicherten Wert. |
+| Gerät | Optionaler Pushover-Gerätename. Leer sendet an alle Geräte des Empfängers. |
+| Ausfall melden nach | Ein Wechselrichter-Modbusfehler muss zwischen 10 und 3.600 Sekunden ununterbrochen bestehen, bevor einmalig eine Ausfallmeldung eingeplant wird. Kurze Kommunikationsstörungen lösen dadurch keine Meldung aus. |
+| Wiederholungsversuch nach Sendefehler | Abstand von 1 bis 1.440 Minuten, bevor eine nicht zugestellte Nachricht erneut versucht wird. Erfolgreich gemeldete Zustandswechsel werden nicht laufend wiederholt. |
+| Zugangsdaten löschen | Deaktiviert Pushover und entfernt Token, User-Key sowie Gerätename dauerhaft. |
+| Testnachricht senden | Verwendet neu eingegebene Werte sofort, ohne sie zu speichern. Leere Token-/User-Felder greifen auf bereits gespeicherte Werte zurück. |
+
+Automatisch gemeldet werden:
+
+- Start oder Neustart des ESP32, sobald Heim-WLAN, Internet und eine per NTP gültige Uhrzeit verfügbar sind,
+- ein länger als die eingestellte Verzögerung bestehender Ausfall der Wechselrichter-Modbusabfrage,
+- die erste erfolgreiche Modbusabfrage nach einem bereits gemeldeten Ausfall.
+
+Die Verbindung zum offiziellen Endpunkt `https://api.pushover.net/1/messages.json` wird per HTTPS mit Zertifikatsprüfung aufgebaut. Die Schlüssel werden lokal im ESP32 gespeichert, aber Pushover ist ein externer Dienst. Für jede Installation sollte eine eigene Pushover-Anwendung verwendet werden. Ist nur die direkte Modbusverbindung gestört, kann die Ausfallmeldung gesendet werden. Sind ESP32, Router oder Internetzugang selbst stromlos, ist keine sofortige Nachricht möglich; nach der Wiederkehr meldet der ESP32 seinen Neustart. Pushover ersetzt keine zertifizierte Alarm- oder Netzüberwachung.
 
 ### Informationsblock unten
 

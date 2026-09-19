@@ -48,6 +48,7 @@
   - Lokales 15-Minuten-Lastprofil je Wochentag mit stuendlicher NVS-Speicherung.
   - Dauerhafter 31-Tage-Anlagenverlauf in LittleFS mit Messpunkten im 5-Minuten-Takt.
   - Drei- oder Vier-Kontakt-Rundsteuerung mit verifizierten Exportlimit-Schreibzugriffen.
+  - Optionale Pushover-Meldungen fuer Start, Modbus-Ausfall und Wiederherstellung.
   - Fuer einen RS485-Transceiver sind RX, TX und ein gemeinsamer DE-/RE-Pin konfigurierbar.
   - Es ist keine zusaetzliche Modbus-Bibliothek erforderlich.
   - Der ESP32 startet immer einen eigenen Access Point.
@@ -95,10 +96,41 @@ constexpr uint32_t LOAD_SAMPLE_INTERVAL_MS = 5000;
 constexpr uint32_t PROFILE_PERSIST_INTERVAL_MS = 60UL * 60UL * 1000UL;
 constexpr uint32_t HISTORY_SAMPLE_SECONDS = 5UL * 60UL;
 constexpr uint16_t HISTORY_RETENTION_DAYS = 31;
+constexpr uint16_t PUSHOVER_FAILURE_DELAY_SECONDS = 60;
+constexpr uint16_t PUSHOVER_RETRY_MINUTES = 15;
+constexpr char PUSHOVER_ENDPOINT[] = "https://api.pushover.net/1/messages.json";
 constexpr char HISTORY_PARTITION_LABEL[] = "history";
 constexpr char HISTORY_DIRECTORY[] = "/history";
 constexpr char PROFILE_PARTITION_LABEL[] = "profile";
 }  // namespace ConfigDefaults
+
+// Vertrauensanker fuer die verifizierte TLS-Verbindung zu api.pushover.net.
+// Quelle: DigiCert Global Root G2, SHA-256
+// CB:3C:CB:B7:60:31:E5:E0:13:8F:8D:D3:9A:23:F9:DE:
+// 47:FF:C3:5E:43:C1:14:4C:EA:27:D4:6A:5A:B1:CB:5F
+const char PUSHOVER_ROOT_CA[] PROGMEM = R"PEM(-----BEGIN CERTIFICATE-----
+MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh
+MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
+d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBH
+MjAeFw0xMzA4MDExMjAwMDBaFw0zODAxMTUxMjAwMDBaMGExCzAJBgNVBAYTAlVT
+MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j
+b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IEcyMIIBIjANBgkqhkiG
+9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuzfNNNx7a8myaJCtSnX/RrohCgiN9RlUyfuI
+2/Ou8jqJkTx65qsGGmvPrC3oXgkkRLpimn7Wo6h+4FR1IAWsULecYxpsMNzaHxmx
+1x7e/dfgy5SDN67sH0NO3Xss0r0upS/kqbitOtSZpLYl6ZtrAGCSYP9PIUkY92eQ
+q2EGnI/yuum06ZIya7XzV+hdG82MHauVBJVJ8zUtluNJbd134/tJS7SsVQepj5Wz
+tCO7TG1F8PapspUwtP1MVYwnSlcUfIKdzXOS0xZKBgyMUNGPHgm+F6HmIcr9g+UQ
+vIOlCsRnKPZzFBQ9RnbDhxSJITRNrw9FDKZJobq7nMWxM4MphQIDAQABo0IwQDAP
+BgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBhjAdBgNVHQ4EFgQUTiJUIBiV
+5uNu5g/6+rkS7QYXjzkwDQYJKoZIhvcNAQELBQADggEBAGBnKJRvDkhj6zHd6mcY
+1Yl9PMWLSn/pvtsrF9+wX3N3KjITOYFnQoQj8kVnNeyIv/iPsGEMNKSuIEyExtv4
+NeF22d+mQrvHRAiGfzZ0JFrabA0UWTW98kndth/Jsw1HKj2ZL7tcu7XUIOGZX1NG
+Fdtom/DzMNU+MeKNhJ7jitralj41E6Vf8PlwUHBHQRFXGU7Aj64GxJUTFy8bJZ91
+8rGOmaFvE7FBcf6IKshPECBV1/MUReXgRPTqh5Uykw7+U0b6LJ3/iyK5S9kJRaTe
+pLiaWN0bfVKfjllDiIGknibVb63dDcY3fe0Dkhvld1927jyNxF1WW6LZZm6zNTfl
+MrY=
+-----END CERTIFICATE-----
+)PEM";
 
 constexpr size_t SURPLUS_STAGE_COUNT = 5;
 constexpr size_t RIPPLE_INPUT_COUNT = 4;
@@ -438,6 +470,12 @@ struct AppConfig {
   bool rippleEnabled;
   uint8_t rippleSignalMode;
   RippleInputConfig rippleInputs[RIPPLE_INPUT_COUNT];
+  bool pushoverEnabled;
+  String pushoverAppToken;
+  String pushoverUserKey;
+  String pushoverDevice;
+  uint16_t pushoverFailureDelaySeconds;
+  uint16_t pushoverRetryMinutes;
 } config;
 
 enum class ModbusMode : uint8_t {
@@ -640,6 +678,26 @@ bool rtuFallbackActive = false;
 bool mdnsStarted = false;
 bool timeSyncStarted = false;
 
+enum class PushoverEvent : uint8_t {
+  NONE,
+  STARTED,
+  MODBUS_OUTAGE,
+  MODBUS_RESTORED
+};
+
+PushoverEvent pendingPushoverEvent = PushoverEvent::NONE;
+String pendingPushoverTitle;
+String pendingPushoverMessage;
+String lastPushoverStatus = "Noch keine Nachricht gesendet";
+uint32_t nextPushoverAttemptAt = 0;
+uint32_t pushoverModbusFailureSince = 0;
+bool pushoverBootPending = true;
+bool pushoverModbusOutageActive = false;
+bool pushoverModbusOutageDelivered = false;
+bool pushoverRecoveryNeeded = false;
+
+bool timeReached(uint32_t target);
+
 void appendWebDebug(const String &text) {
   if (!webDebugEnabled) return;
   webDebugBuffer += text;
@@ -661,6 +719,183 @@ void debugPrintf(const char *format, ...) {
   va_end(arguments);
   Serial.print(buffer);
   appendWebDebug(buffer);
+}
+
+bool isPushoverCredential(const String &value) {
+  if (value.length() != 30) return false;
+  for (size_t i = 0; i < value.length(); ++i) {
+    const char c = value[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool isPushoverDevice(const String &value) {
+  if (value.length() > 25) return false;
+  for (size_t i = 0; i < value.length(); ++i) {
+    const char c = value[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+          || c == '_' || c == '-')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool pushoverConfigured() {
+  return config.pushoverEnabled
+      && isPushoverCredential(config.pushoverAppToken)
+      && isPushoverCredential(config.pushoverUserKey)
+      && isPushoverDevice(config.pushoverDevice);
+}
+
+bool systemTimeIsValid() {
+  return time(nullptr) >= 1704067200;  // 01.01.2024; fuer die TLS-Zertifikatspruefung erforderlich
+}
+
+String formUrlEncode(const String &input) {
+  static const char HEX_DIGITS[] = "0123456789ABCDEF";
+  String output;
+  output.reserve(input.length() * 3 / 2 + 8);
+  for (size_t i = 0; i < input.length(); ++i) {
+    const uint8_t c = static_cast<uint8_t>(input[i]);
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+        || c == '-' || c == '_' || c == '.' || c == '~') {
+      output += static_cast<char>(c);
+    } else if (c == ' ') {
+      output += '+';
+    } else {
+      output += '%';
+      output += HEX_DIGITS[c >> 4];
+      output += HEX_DIGITS[c & 0x0F];
+    }
+  }
+  return output;
+}
+
+bool sendPushoverMessage(const String &appToken, const String &userKey, const String &device,
+                         const String &title, const String &message, String &status) {
+  if (WiFi.status() != WL_CONNECTED) {
+    status = "Kein Heim-WLAN verbunden";
+    return false;
+  }
+  if (!systemTimeIsValid()) {
+    status = "Systemzeit noch nicht per NTP synchronisiert";
+    return false;
+  }
+  if (!isPushoverCredential(appToken) || !isPushoverCredential(userKey) || !isPushoverDevice(device)) {
+    status = "Token, User-Key oder optionales Gerät ist ungültig";
+    return false;
+  }
+
+  String body = "token=" + formUrlEncode(appToken)
+              + "&user=" + formUrlEncode(userKey)
+              + "&title=" + formUrlEncode(title)
+              + "&message=" + formUrlEncode(message);
+  if (!device.isEmpty()) body += "&device=" + formUrlEncode(device);
+
+  NetworkClientSecure secureClient;
+  secureClient.setCACert(PUSHOVER_ROOT_CA);
+  HTTPClient http;
+  http.setConnectTimeout(8000);
+  http.setTimeout(10000);
+  if (!http.begin(secureClient, ConfigDefaults::PUSHOVER_ENDPOINT)) {
+    status = "HTTPS-Verbindung konnte nicht vorbereitet werden";
+    return false;
+  }
+  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+  const int responseCode = http.POST(body);
+  const String response = responseCode > 0 ? http.getString() : String();
+  http.end();
+
+  if (responseCode == HTTP_CODE_OK
+      && (response.indexOf("\"status\":1") >= 0 || response.indexOf("\"status\": 1") >= 0)) {
+    status = "Nachricht erfolgreich an Pushover übergeben";
+    return true;
+  }
+  status = responseCode > 0
+      ? "Pushover antwortete mit HTTP " + String(responseCode)
+      : "HTTPS-Fehler: " + HTTPClient::errorToString(responseCode);
+  return false;
+}
+
+bool queuePushoverEvent(PushoverEvent event, const String &title, const String &message) {
+  if (pendingPushoverEvent != PushoverEvent::NONE) return false;
+  pendingPushoverEvent = event;
+  pendingPushoverTitle = title;
+  pendingPushoverMessage = message;
+  nextPushoverAttemptAt = millis();
+  return true;
+}
+
+void observePushoverModbusState(bool healthy) {
+  const uint32_t now = millis();
+  if (healthy) {
+    pushoverModbusFailureSince = 0;
+    if (!pushoverModbusOutageActive) return;
+    if (pendingPushoverEvent == PushoverEvent::MODBUS_OUTAGE && !pushoverModbusOutageDelivered) {
+      pendingPushoverEvent = PushoverEvent::NONE;
+      pendingPushoverTitle = "";
+      pendingPushoverMessage = "";
+    }
+    if (pushoverModbusOutageDelivered) pushoverRecoveryNeeded = true;
+    pushoverModbusOutageActive = false;
+    return;
+  }
+
+  if (pushoverModbusFailureSince == 0) pushoverModbusFailureSince = now;
+  const uint32_t delayMs = static_cast<uint32_t>(config.pushoverFailureDelaySeconds) * 1000UL;
+  if (now - pushoverModbusFailureSince < delayMs) return;
+  pushoverModbusOutageActive = true;
+  if (!pushoverModbusOutageDelivered && pendingPushoverEvent == PushoverEvent::NONE) {
+    String message = "Seit mindestens " + String(config.pushoverFailureDelaySeconds)
+                   + " Sekunden keine Modbus-Antwort vom Wechselrichter. Fehler: "
+                   + lastInverterError;
+    queuePushoverEvent(PushoverEvent::MODBUS_OUTAGE, "Solar Prognose Monitor: Modbus-Ausfall", message);
+  }
+}
+
+void servicePushover() {
+  if (!pushoverConfigured() || WiFi.status() != WL_CONNECTED || !systemTimeIsValid()) return;
+
+  if (pendingPushoverEvent == PushoverEvent::NONE && pushoverRecoveryNeeded) {
+    queuePushoverEvent(PushoverEvent::MODBUS_RESTORED,
+                       "Solar Prognose Monitor: Modbus wieder erreichbar",
+                       "Die Modbus-Verbindung zum Wechselrichter arbeitet wieder. Transport: "
+                           + lastModbusTransport);
+  }
+  if (pendingPushoverEvent == PushoverEvent::NONE && pushoverBootPending) {
+    queuePushoverEvent(PushoverEvent::STARTED, "Solar Prognose Monitor gestartet",
+                       "ESP32 gestartet oder neu gestartet. Firmware "
+                           + String(ConfigDefaults::FIRMWARE_VERSION) + ", IP "
+                           + WiFi.localIP().toString() + ".");
+  }
+  if (pendingPushoverEvent == PushoverEvent::NONE || !timeReached(nextPushoverAttemptAt)) return;
+
+  String status;
+  if (sendPushoverMessage(config.pushoverAppToken, config.pushoverUserKey, config.pushoverDevice,
+                          pendingPushoverTitle, pendingPushoverMessage, status)) {
+    const PushoverEvent deliveredEvent = pendingPushoverEvent;
+    pendingPushoverEvent = PushoverEvent::NONE;
+    pendingPushoverTitle = "";
+    pendingPushoverMessage = "";
+    nextPushoverAttemptAt = 0;
+    if (deliveredEvent == PushoverEvent::STARTED) pushoverBootPending = false;
+    if (deliveredEvent == PushoverEvent::MODBUS_OUTAGE) pushoverModbusOutageDelivered = true;
+    if (deliveredEvent == PushoverEvent::MODBUS_RESTORED) {
+      pushoverRecoveryNeeded = false;
+      pushoverModbusOutageDelivered = false;
+    }
+    lastPushoverStatus = status;
+    debugPrintln("Pushover: " + status + ".");
+  } else {
+    lastPushoverStatus = status;
+    nextPushoverAttemptAt = millis()
+        + static_cast<uint32_t>(config.pushoverRetryMinutes) * 60UL * 1000UL;
+    debugPrintln("Pushover: " + status + "; späterer Wiederholungsversuch.");
+  }
 }
 
 const char INDEX_HTML[] PROGMEM = R"HTML(
@@ -708,7 +943,7 @@ const char SETTINGS_HEAD[] PROGMEM = R"HTML(
 <title>Einstellungen · Solar Prognose Monitor</title><style>
 :root{--bg:#f3f5f7;--card:#fff;--text:#17212b;--muted:#64717d;--accent:#087f5b;--line:#dfe4e8}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}
 header{background:var(--card);border-bottom:1px solid var(--line)}.bar{max-width:760px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}.nav{display:flex;gap:8px}.nav a{color:var(--text);text-decoration:none;padding:8px 11px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}
-main{max-width:820px;margin:22px auto;padding:0 18px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}h2{font-size:17px;margin:0 0 15px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.full{grid-column:1/-1}label{display:block;font-weight:600;margin-bottom:5px}input,select,textarea{width:100%;padding:10px 11px;border:1px solid #cbd2d8;border-radius:8px;background:#fff;font:inherit}textarea{min-height:76px;resize:vertical}.hint{color:var(--muted);font-size:13px;margin:6px 0 0}.caution{background:#fff7dd;border:1px solid #e7c95d;border-radius:9px;color:#684f00;padding:11px 13px;line-height:1.45}.check{display:flex;gap:9px;align-items:center;font-weight:400}.check input{width:auto}.stage-card{border:1px solid var(--line);border-radius:10px;margin:12px 0;background:#fafbfb}.stage-card summary{cursor:pointer;padding:13px 14px;font-weight:700}.stage-body{padding:4px 14px 15px}.type-panel{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}.hidden{display:none}.button{border:0;border-radius:9px;background:var(--accent);color:#fff;padding:11px 16px;font:inherit;font-weight:650;cursor:pointer}.info{line-height:1.6}@media(max-width:620px){.bar{flex-wrap:wrap}.nav{width:100%;overflow-x:auto}.grid{grid-template-columns:1fr}.full{grid-column:auto}}
+main{max-width:820px;margin:22px auto;padding:0 18px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}h2{font-size:17px;margin:0 0 15px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.full{grid-column:1/-1}label{display:block;font-weight:600;margin-bottom:5px}input,select,textarea{width:100%;padding:10px 11px;border:1px solid #cbd2d8;border-radius:8px;background:#fff;font:inherit}textarea{min-height:76px;resize:vertical}.hint{color:var(--muted);font-size:13px;margin:6px 0 0}.caution{background:#fff7dd;border:1px solid #e7c95d;border-radius:9px;color:#684f00;padding:11px 13px;line-height:1.45}.check{display:flex;gap:9px;align-items:center;font-weight:400}.check input{width:auto}.stage-card{border:1px solid var(--line);border-radius:10px;margin:12px 0;background:#fafbfb}.stage-card summary{cursor:pointer;padding:13px 14px;font-weight:700}.stage-body{padding:4px 14px 15px}.type-panel{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}.hidden{display:none}.button{border:0;border-radius:9px;background:var(--accent);color:#fff;padding:11px 16px;font:inherit;font-weight:650;cursor:pointer}.button.secondary{background:#66727d}.result{display:inline-block;margin-left:10px;color:var(--muted)}.info{line-height:1.6}@media(max-width:620px){.bar{flex-wrap:wrap}.nav{width:100%;overflow-x:auto}.grid{grid-template-columns:1fr}.full{grid-column:auto}.result{display:block;margin:10px 0 0}}
 </style></head><body><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a class="active" href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header><main>
 )HTML";
 
@@ -982,6 +1217,14 @@ void loadConfig() {
   config.rs485TxPin = preferences.getUChar("rtx", ConfigDefaults::RS485_TX_PIN);
   config.rs485DePin = preferences.getUChar("rde", ConfigDefaults::RS485_DE_PIN);
   webDebugEnabled = preferences.getBool("webdebug", false);
+  config.pushoverEnabled = preferences.getBool("poen", false);
+  config.pushoverAppToken = preferences.getString("potoken", "");
+  config.pushoverUserKey = preferences.getString("pouser", "");
+  config.pushoverDevice = preferences.getString("podevice", "");
+  config.pushoverFailureDelaySeconds = preferences.getUShort(
+      "podelay", ConfigDefaults::PUSHOVER_FAILURE_DELAY_SECONDS);
+  config.pushoverRetryMinutes = preferences.getUShort(
+      "poretry", ConfigDefaults::PUSHOVER_RETRY_MINUTES);
   config.forecastEnabled = preferences.getBool("fcen", config.forecastEnabled);
   config.forecastBypass = preferences.getBool("fcbypass", config.forecastBypass);
   config.latitude = preferences.getFloat("lat", config.latitude);
@@ -1076,6 +1319,13 @@ void loadConfig() {
   if (config.batteryTcpUnit == 0) config.batteryTcpUnit = ConfigDefaults::BATTERY_TCP_UNIT;
   if (config.batteryRtuUnit == 0) config.batteryRtuUnit = ConfigDefaults::BATTERY_RTU_UNIT;
   if (config.pollSeconds < 2 || config.pollSeconds > 300) config.pollSeconds = ConfigDefaults::POLL_SECONDS;
+  if (!isPushoverDevice(config.pushoverDevice)) config.pushoverDevice = "";
+  if (config.pushoverFailureDelaySeconds < 10 || config.pushoverFailureDelaySeconds > 3600) {
+    config.pushoverFailureDelaySeconds = ConfigDefaults::PUSHOVER_FAILURE_DELAY_SECONDS;
+  }
+  if (config.pushoverRetryMinutes < 1 || config.pushoverRetryMinutes > 1440) {
+    config.pushoverRetryMinutes = ConfigDefaults::PUSHOVER_RETRY_MINUTES;
+  }
   sanitizeModbusConfig();
   sanitizeSurplusConfig();
   sanitizeForecastConfig();
@@ -1098,6 +1348,12 @@ void saveConfig() {
   preferences.putUChar("rtx", config.rs485TxPin);
   preferences.putUChar("rde", config.rs485DePin);
   preferences.putBool("webdebug", webDebugEnabled);
+  preferences.putBool("poen", config.pushoverEnabled);
+  preferences.putString("potoken", config.pushoverAppToken);
+  preferences.putString("pouser", config.pushoverUserKey);
+  preferences.putString("podevice", config.pushoverDevice);
+  preferences.putUShort("podelay", config.pushoverFailureDelaySeconds);
+  preferences.putUShort("poretry", config.pushoverRetryMinutes);
   preferences.putBool("fcen", config.forecastEnabled);
   preferences.putBool("fcbypass", config.forecastBypass);
   preferences.putFloat("lat", config.latitude);
@@ -1879,6 +2135,7 @@ void finishPollingCycle() {
   }
   pollingCycleActive = false;
   nextPollAt = now + static_cast<uint32_t>(config.pollSeconds) * 1000UL;
+  observePushoverModbusState(inverterCycleOk);
   debugPrintf("Modbus-Zyklus beendet: Wechselrichter %s, Batterie %s; letzter Transport: %s.\n",
               inverterCycleOk ? "OK" : "Fehler", batteryCycleOk ? "OK" : "Fehler", lastModbusTransport.c_str());
 }
@@ -3562,7 +3819,29 @@ void handleSettings() {
     sendChunk(card);
   }
 
-  part = F("<p class='hint'><b>Wichtig:</b> GPIOs dürfen Heizpatrone, Klimaanlage oder andere Netzlasten niemals direkt schalten. Verwende passend dimensionierte Relais, SSRs oder Schütze und lasse die Netzseite fachgerecht installieren.</p></section><button class='button' type='submit'>Speichern und neu starten</button></form><section class='card info'><h2>Verbindung</h2><b>Access Point:</b> ");
+  part = F("<p class='hint'><b>Wichtig:</b> GPIOs dürfen Heizpatrone, Klimaanlage oder andere Netzlasten niemals direkt schalten. Verwende passend dimensionierte Relais, SSRs oder Schütze und lasse die Netzseite fachgerecht installieren.</p></section><section class='card'><h2>Pushover-Benachrichtigungen</h2><div class='grid'><label class='check full'><input type='checkbox' name='poEnabled' value='1'");
+  if (config.pushoverEnabled) part += F(" checked");
+  part += F("> Meldungen an Pushover aktivieren</label><div class='full'><p class='hint'>Benachrichtigt beim Start/Neustart, nach einem anhaltenden Modbus-Ausfall und nach Wiederherstellung der Verbindung. Für jedes Gerät bzw. jede Installation sollte in Pushover eine eigene Anwendung angelegt werden.</p></div><label>Application/API Token<input id='poToken' name='poToken' type='password' maxlength='30' pattern='[A-Za-z0-9]{30}' autocomplete='new-password' data-stored='");
+  part += isPushoverCredential(config.pushoverAppToken) ? F("1") : F("0");
+  part += F("' placeholder='");
+  part += isPushoverCredential(config.pushoverAppToken)
+      ? F("Gespeichert – leer lassen zum Beibehalten")
+      : F("30-stelliger App-Token");
+  part += F("'><p class='hint'>Wird nach dem Speichern nicht wieder im Browser angezeigt.</p></label><label>User-/Group-Key<input id='poUser' name='poUser' type='password' maxlength='30' pattern='[A-Za-z0-9]{30}' autocomplete='new-password' data-stored='");
+  part += isPushoverCredential(config.pushoverUserKey) ? F("1") : F("0");
+  part += F("' placeholder='");
+  part += isPushoverCredential(config.pushoverUserKey)
+      ? F("Gespeichert – leer lassen zum Beibehalten")
+      : F("30-stelliger User- oder Group-Key");
+  part += F("'><p class='hint'>Wird nach dem Speichern nicht wieder im Browser angezeigt.</p></label><label>Gerät (optional)<input id='poDevice' name='poDevice' maxlength='25' pattern='[A-Za-z0-9_-]{0,25}' value='");
+  part += htmlEscape(config.pushoverDevice);
+  part += F("' placeholder='z. B. marcus-phone'></label><label>Ausfall melden nach (s)<input name='poDelay' type='number' min='10' max='3600' value='");
+  part += String(config.pushoverFailureDelaySeconds);
+  part += F("'></label><label>Wiederholungsversuch nach Sendefehler (min)<input name='poRetry' type='number' min='1' max='1440' value='");
+  part += String(config.pushoverRetryMinutes);
+  part += F("'></label><div class='full'><label class='check'><input type='checkbox' name='poClear' value='1'> Gespeicherte Pushover-Zugangsdaten löschen</label></div><div class='full'><button id='poTest' class='button secondary' type='button'>Testnachricht senden</button><span id='poResult' class='result'>");
+  part += htmlEscape(lastPushoverStatus);
+  part += F("</span><p class='hint'>Die Testnachricht verwendet neue Eingaben direkt, ohne sie zu speichern; leere Felder verwenden bereits gespeicherte Zugangsdaten. Die Verbindung zu Pushover wird per HTTPS mit Zertifikatsprüfung aufgebaut. Ist ESP32, Router oder Internet stromlos, kann keine Sofortmeldung versendet werden; nach dem Neustart folgt die Startmeldung.</p></div></div></section><button class='button' type='submit'>Speichern und neu starten</button></form><section class='card info'><h2>Verbindung</h2><b>Access Point:</b> ");
   part += htmlEscape(accessPointSsid);
   part += F("<br><b>AP-Passwort:</b> ");
   part += ConfigDefaults::AP_PASSWORD;
@@ -3572,7 +3851,7 @@ void handleSettings() {
   part += WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("nicht verbunden");
   part += F("<br><b>mDNS:</b> http://");
   part += ConfigDefaults::MDNS_NAME;
-  part += F(".local</section><script>function toggleModbus(){const mode=document.querySelector('#mbMode').value,tcp=mode!=='1',rtu=mode!=='0';document.querySelector('#modbusTcpFields').classList.toggle('hidden',!tcp);document.querySelector('#modbusRtuFields').classList.toggle('hidden',!rtu);document.querySelector('#host').required=tcp}function toggleStage(i){const t=document.querySelector('[data-stage-type=\"'+i+'\"]');const api=t.value==='1';document.querySelector('#s'+i+'-gpio').classList.toggle('hidden',api);document.querySelector('#s'+i+'-api').classList.toggle('hidden',!api);const m=document.querySelector('[data-stage-method=\"'+i+'\"]');document.querySelectorAll('[data-json=\"'+i+'\"]').forEach(x=>x.classList.toggle('hidden',m.value==='0'))}document.querySelector('#mbMode').addEventListener('change',toggleModbus);toggleModbus();for(let i=1;i<=5;i++){document.querySelector('[data-stage-type=\"'+i+'\"]').addEventListener('change',()=>toggleStage(i));document.querySelector('[data-stage-method=\"'+i+'\"]').addEventListener('change',()=>toggleStage(i));toggleStage(i)}document.querySelector('#settingsForm').addEventListener('submit',function(e){const used=new Set(),rtu=this.elements.mbMode.value!=='0';if(rtu){const rx=this.elements.rRx.value,tx=this.elements.rTx.value,de=this.elements.rDe.value;if(rx===tx||rx===de||tx===de){e.preventDefault();alert('RX, TX und DE/RE müssen unterschiedliche GPIOs verwenden.');return}used.add(rx);used.add(tx);if(de!=='255')used.add(de)}for(let i=1;i<=5;i++){if(!this.elements['s'+i+'e'].checked)continue;if(this.elements['s'+i+'t'].value==='0'){const gpio=this.elements['s'+i+'g'].value;if(used.has(gpio)){e.preventDefault();alert('GPIO '+gpio+' ist bereits durch RS485 oder eine andere aktive Stufe belegt.');return}used.add(gpio)}else if(!this.elements['s'+i+'uon'].value.startsWith('http://')||!this.elements['s'+i+'uoff'].value.startsWith('http://')){e.preventDefault();alert('Stufe '+i+': Für eine aktive Web-API werden eine EIN- und AUS-URL mit http:// benötigt.');return}}if(this.elements.rcen.checked){const rcEnabled=[1,2,3,4].filter(i=>this.elements['rc'+i+'e'].checked),rcMode=Number(this.elements.rcmode.value);if(rcEnabled.length!==rcMode){e.preventDefault();alert('Für den '+rcMode+'-Kontakt-Betrieb müssen genau '+rcMode+' Eingänge aktiviert sein.');return}if(rcMode===4&&!rcEnabled.some(i=>Number(this.elements['rc'+i+'p'].value)===100)){e.preventDefault();alert('Im 4-Kontakt-Betrieb muss ein Eingang auf 100 % eingestellt sein.');return}for(let i=1;i<=4;i++){if(!this.elements['rc'+i+'e'].checked)continue;const gpio=this.elements['rc'+i+'g'].value;if(used.has(gpio)){e.preventDefault();alert('Rundsteuer-Eingang '+i+': GPIO '+gpio+' ist bereits belegt.');return}used.add(gpio)}const kwp=[1,2,3,4].filter(i=>this.elements['pv'+i+'e'].checked).reduce((s,i)=>s+Number(this.elements['pv'+i+'k'].value||0),0);if(kwp<=0||kwp>65.535){e.preventDefault();alert('Für die Rundsteuerung muss die aktive Dachleistung größer 0 und höchstens 65,535 kWp sein.');return}}})</script></main></body></html>");
+  part += F(".local</section><script>function toggleModbus(){const mode=document.querySelector('#mbMode').value,tcp=mode!=='1',rtu=mode!=='0';document.querySelector('#modbusTcpFields').classList.toggle('hidden',!tcp);document.querySelector('#modbusRtuFields').classList.toggle('hidden',!rtu);document.querySelector('#host').required=tcp}function toggleStage(i){const t=document.querySelector('[data-stage-type=\"'+i+'\"]');const api=t.value==='1';document.querySelector('#s'+i+'-gpio').classList.toggle('hidden',api);document.querySelector('#s'+i+'-api').classList.toggle('hidden',!api);const m=document.querySelector('[data-stage-method=\"'+i+'\"]');document.querySelectorAll('[data-json=\"'+i+'\"]').forEach(x=>x.classList.toggle('hidden',m.value==='0'))}document.querySelector('#mbMode').addEventListener('change',toggleModbus);toggleModbus();for(let i=1;i<=5;i++){document.querySelector('[data-stage-type=\"'+i+'\"]').addEventListener('change',()=>toggleStage(i));document.querySelector('[data-stage-method=\"'+i+'\"]').addEventListener('change',()=>toggleStage(i));toggleStage(i)}document.querySelector('#poTest').addEventListener('click',async()=>{const f=document.querySelector('#settingsForm'),out=document.querySelector('#poResult');out.textContent='Wird gesendet …';const body=new URLSearchParams({token:f.elements.poToken.value,user:f.elements.poUser.value,device:f.elements.poDevice.value});try{const r=await fetch('/api/pushover/test',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});out.textContent=await r.text()}catch(e){out.textContent='Fehler: '+e.message}});document.querySelector('#settingsForm').addEventListener('submit',function(e){const used=new Set(),rtu=this.elements.mbMode.value!=='0';if(this.elements.poEnabled.checked&&!this.elements.poClear.checked){if(!this.elements.poToken.value&&this.elements.poToken.dataset.stored!=='1'||!this.elements.poUser.value&&this.elements.poUser.dataset.stored!=='1'){e.preventDefault();alert('Für aktive Pushover-Meldungen werden Application/API Token und User-/Group-Key benötigt.');return}}if(rtu){const rx=this.elements.rRx.value,tx=this.elements.rTx.value,de=this.elements.rDe.value;if(rx===tx||rx===de||tx===de){e.preventDefault();alert('RX, TX und DE/RE müssen unterschiedliche GPIOs verwenden.');return}used.add(rx);used.add(tx);if(de!=='255')used.add(de)}for(let i=1;i<=5;i++){if(!this.elements['s'+i+'e'].checked)continue;if(this.elements['s'+i+'t'].value==='0'){const gpio=this.elements['s'+i+'g'].value;if(used.has(gpio)){e.preventDefault();alert('GPIO '+gpio+' ist bereits durch RS485 oder eine andere aktive Stufe belegt.');return}used.add(gpio)}else if(!this.elements['s'+i+'uon'].value.startsWith('http://')||!this.elements['s'+i+'uoff'].value.startsWith('http://')){e.preventDefault();alert('Stufe '+i+': Für eine aktive Web-API werden eine EIN- und AUS-URL mit http:// benötigt.');return}}if(this.elements.rcen.checked){const rcEnabled=[1,2,3,4].filter(i=>this.elements['rc'+i+'e'].checked),rcMode=Number(this.elements.rcmode.value);if(rcEnabled.length!==rcMode){e.preventDefault();alert('Für den '+rcMode+'-Kontakt-Betrieb müssen genau '+rcMode+' Eingänge aktiviert sein.');return}if(rcMode===4&&!rcEnabled.some(i=>Number(this.elements['rc'+i+'p'].value)===100)){e.preventDefault();alert('Im 4-Kontakt-Betrieb muss ein Eingang auf 100 % eingestellt sein.');return}for(let i=1;i<=4;i++){if(!this.elements['rc'+i+'e'].checked)continue;const gpio=this.elements['rc'+i+'g'].value;if(used.has(gpio)){e.preventDefault();alert('Rundsteuer-Eingang '+i+': GPIO '+gpio+' ist bereits belegt.');return}used.add(gpio)}const kwp=[1,2,3,4].filter(i=>this.elements['pv'+i+'e'].checked).reduce((s,i)=>s+Number(this.elements['pv'+i+'k'].value||0),0);if(kwp<=0||kwp>65.535){e.preventDefault();alert('Für die Rundsteuerung muss die aktive Dachleistung größer 0 und höchstens 65,535 kWp sein.');return}}})</script></main></body></html>");
   sendChunk(part);
   sendChunk(String());
 }
@@ -3615,6 +3894,28 @@ void handleSave() {
       config.wifiPassword = server.arg("password");
     }
   }
+
+  if (server.hasArg("poClear")) {
+    config.pushoverEnabled = false;
+    config.pushoverAppToken = "";
+    config.pushoverUserKey = "";
+    config.pushoverDevice = "";
+  } else {
+    config.pushoverEnabled = server.hasArg("poEnabled");
+    String submittedToken = server.arg("poToken");
+    String submittedUser = server.arg("poUser");
+    String submittedDevice = server.arg("poDevice");
+    submittedToken.trim();
+    submittedUser.trim();
+    submittedDevice.trim();
+    if (isPushoverCredential(submittedToken)) config.pushoverAppToken = submittedToken;
+    if (isPushoverCredential(submittedUser)) config.pushoverUserKey = submittedUser;
+    config.pushoverDevice = isPushoverDevice(submittedDevice) ? submittedDevice : String();
+  }
+  config.pushoverFailureDelaySeconds = static_cast<uint16_t>(boundedNumberArgument(
+      "poDelay", ConfigDefaults::PUSHOVER_FAILURE_DELAY_SECONDS, 10, 3600));
+  config.pushoverRetryMinutes = static_cast<uint16_t>(boundedNumberArgument(
+      "poRetry", ConfigDefaults::PUSHOVER_RETRY_MINUTES, 1, 1440));
 
   config.modbusHost = server.arg("host");
   config.modbusHost.trim();
@@ -3712,6 +4013,28 @@ void handleSave() {
   const String page = F("<!doctype html><html lang='de'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='6;url=/inverter'><title>Gespeichert</title><style>body{font:16px system-ui;background:#f3f5f7;color:#17212b;display:grid;place-items:center;min-height:100vh;margin:0}.box{background:white;padding:24px;border:1px solid #dfe4e8;border-radius:12px;max-width:440px}h1{font-size:21px;margin-top:0}</style></head><body><div class='box'><h1>Einstellungen gespeichert</h1><p>Der ESP32 startet neu. Die Seite versucht anschließend, den Monitor wieder zu öffnen.</p><p>Falls sich die Netzwerkadresse ändert, verbinde dich mit dem Access Point und öffne <b>192.168.4.1</b>.</p></div></body></html>");
   server.send(200, "text/html; charset=utf-8", page);
   restartAt = millis() + 1500;
+}
+
+void handlePushoverTest() {
+  addNoCacheHeaders();
+  String token = server.arg("token");
+  String user = server.arg("user");
+  String device = server.arg("device");
+  token.trim();
+  user.trim();
+  device.trim();
+  if (token.isEmpty()) token = config.pushoverAppToken;
+  if (user.isEmpty()) user = config.pushoverUserKey;
+
+  String status;
+  const bool success = sendPushoverMessage(
+      token, user, device, "Solar Prognose Monitor: Test",
+      "Die Pushover-Verbindung funktioniert. Firmware "
+          + String(ConfigDefaults::FIRMWARE_VERSION) + ", IP " + WiFi.localIP().toString() + ".",
+      status);
+  lastPushoverStatus = status;
+  debugPrintln("Pushover-Test: " + status + ".");
+  server.send(success ? 200 : 503, "text/plain; charset=utf-8", status);
 }
 
 void sendChunk(const String &text) {
@@ -4374,6 +4697,7 @@ void startWebServer() {
   server.on("/api/load-profile", HTTP_GET, handleLoadProfileApi);
   server.on("/api/load-profile/reset", HTTP_POST, handleLoadProfileReset);
   server.on("/api/history", HTTP_GET, handleHistoryApi);
+  server.on("/api/pushover/test", HTTP_POST, handlePushoverTest);
   server.on("/about", HTTP_GET, handleAboutPage);
   server.on("/debug", HTTP_GET, handleLegacyDebugPage);
   server.on("/api/debug", HTTP_GET, handleDebugLog);
@@ -4445,6 +4769,7 @@ void solarPrognoseMonitorLoop() {
     serviceLoadProfile();
     serviceHistory();
     serviceForecastCharging();
+    servicePushover();
   }
 
   if (restartAt != 0 && timeReached(restartAt)) {

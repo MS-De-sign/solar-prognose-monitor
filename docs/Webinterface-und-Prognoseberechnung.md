@@ -149,7 +149,7 @@ Leistungen werden intern mit 10-W-Auflösung und der SOC mit 0,1-Prozent-Auflös
 | **Prognose** | Zeigt Betriebsart, absoluten Batteriestand und freigegebenen SOC, Holding-Werte, erwartete PV-/Last-/Batterieenergie, SOC-Fahrplan, gerasterte Freigabewerte je Uhrzeit sowie stündliche GTI-Werte aller Dachflächen. „Open-Meteo neu laden“ stößt einen neuen Abruf an. |
 | **Lastprofil** | Zeigt je Wochentag Grundlast, Großlast-Anteil, Erwartungswert, heutige Messung und Ereigniswahrscheinlichkeit in 15-Minuten-Blöcken. „Lernprofil löschen“ setzt alle Lerndaten zurück. |
 | **Verlauf** | Zeigt wahlweise die letzten 24 Stunden, 7 Tage oder 31 Tage für PV, Verbrauch, Einspeisung, Netzbezug, Batterieleistung und direkten Batterie-SOC. Die Kurven lassen sich einzeln ein- und ausblenden. |
-| **Einstellungen** | Enthält WLAN, Modbus, Prognose, Dachflächen, Rundsteuerempfänger und fünf Überschuss-Stufen. „Speichern und neu starten“ legt die Werte dauerhaft ab. |
+| **Einstellungen** | Enthält WLAN, Modbus, Prognose, Dachflächen, Rundsteuerempfänger, fünf Überschuss-Stufen und optionale Pushover-Benachrichtigungen. „Speichern und neu starten“ legt die Werte dauerhaft ab. |
 | **Firmware** | Speichert zuerst den aktuellen Lernstand und Anlagenverlauf und verifiziert beide Sicherungen durch vollständiges Rücklesen. Erst danach wird eine zum Board und zur Partitionstabelle passende Firmware-`.bin` installiert. Schlägt die Prüfung fehl, wird das Update abgebrochen. Eine deutlich gekennzeichnete, standardmäßig ausgeschaltete Notfallfreigabe kann den Update-Lockout bewusst umgehen; die betroffenen Profildaten können dann verloren gehen. Vor dem Firmware-Schreiben werden alle Stufen ausgeschaltet; danach startet der ESP32 neu. ArduinoOTA ist nicht enthalten. |
 | **About** | Zeigt installierte Firmware-Version, Hersteller, PolyForm Noncommercial 1.0.0, Chipmodell, Flashgröße, aktiven OTA-Slot, System-NVS, Profil-NVS und Verlaufspartition sowie den Quellcode-/Projektlink. Ein eigener Abschnitt erklärt die nichtkommerzielle Nutzung, verweist auf eine separate kommerzielle Lizenzierung und nennt Haftungsausschluss, Nutzung auf eigene Gefahr sowie die Unabhängigkeit von Sungrow. Am Ende kann Web-Debug aktiviert, angezeigt und geleert werden. Der Puffer umfasst maximal 12.000 Zeichen; sehr frühe Bootmeldungen werden nicht erfasst. |
 
@@ -228,6 +228,14 @@ Jede aktivierte Stufe besitzt Leistung, Typ und getrennte Ein-/Ausschaltverzöge
 - **Ausschaltverzögerung:** Die Ausschaltbedingung muss so lange ununterbrochen erfüllt sein.
 
 Zusätzlich gilt eine feste Leistungshysterese von 150 W. Zur gemessenen Netzeinspeisung wird die Leistung bereits eingeschalteter Stufen zurückgerechnet. Liegt der Batterie-SOC hinter dem Prognoseplan, wird außerdem eine Ladeleistungsreserve für die Batterie abgezogen. Fehlt ein aktueller Einspeisewert, werden alle Stufen ausgeschaltet.
+
+### Pushover-Benachrichtigungen
+
+Optional werden Start/Neustart, ein anhaltender Ausfall der Wechselrichter-Modbusabfrage und deren Wiederherstellung an Pushover gesendet. Dafür werden der Application/API-Token einer eigenen Pushover-Anwendung und der persönliche User-/Group-Key hinterlegt; ein Gerätebezeichner kann den Empfang auf ein Gerät begrenzen. Die beiden Schlüssel werden nach dem Speichern nicht wieder in das Webformular eingesetzt. Leere Schlüsselfelder behalten vorhandene Werte, das Löschfeld entfernt sie ausdrücklich.
+
+Die Ausfallverzögerung unterdrückt kurze Modbusstörungen. Nach erfolgreicher Ausfallmeldung entsteht keine wiederholte Dauermeldung; nach Wiederherstellung folgt genau ein weiterer Zustandswechsel. Scheitert die HTTPS-Übertragung, bestimmt der Wiederholungsabstand den nächsten Versuch. Der Testknopf prüft neue Eingaben ohne vorheriges Speichern. Der offizielle Pushover-Endpunkt wird per HTTPS mit Zertifikatsprüfung angesprochen.
+
+Bei vollständigem Strom- oder Internetausfall kann der ESP32 naturgemäß keine Sofortmeldung übertragen. Sobald Gerät, WLAN, Internet und NTP-Zeit wieder verfügbar sind, wird der Start/Neustart gemeldet. Die Funktion ist eine Komfortbenachrichtigung und keine zertifizierte Alarmanlage.
 
 ## 7. Angezeigte Modbus-Werte
 
