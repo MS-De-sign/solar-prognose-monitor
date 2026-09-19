@@ -18,6 +18,8 @@ Die Steuerung gibt den zulässigen Ladezielwert schrittweise frei. Bei einer une
 
 Aktuelle Version: **1.0.1**
 
+**Hardwarestand:** Die aktuelle Firmware ist für ein klassisches **ESP32 DevKit mit ESP32-WROOM-Modul** ausgelegt. Weitere ESP32-Varianten wie der **ESP32-C3** werden derzeit getestet; Pinbelegung, Partitionierung und Programmcode werden dafür schrittweise angepasst. Bis eine Variante ausdrücklich als unterstützt gekennzeichnet ist, sollte dafür nicht ungeprüft die DevKit-Firmware verwendet werden.
+
 ## Funktionen
 
 - Modbus TCP, Modbus RTU/RS485 oder beide Transportwege

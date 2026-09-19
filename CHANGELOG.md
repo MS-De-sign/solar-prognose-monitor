@@ -6,6 +6,7 @@
 - ergänzt optionale Pushover-Benachrichtigungen bei Start/Neustart, verzögert erkanntem Modbus-Ausfall und Wiederherstellung
 - speichert Pushover-Zugangsdaten verdeckt im ESP32, bietet eine Testnachricht und wiederholt fehlgeschlagene Zustellungen mit einstellbarem Abstand
 - prüft die TLS-Verbindung zu Pushover gegen den eingebetteten DigiCert-Vertrauensanker
+- stellt klar, dass die aktuelle Firmware für das klassische ESP32 DevKit/WROOM ausgelegt ist und weitere Varianten wie der ESP32-C3 noch getestet und angepasst werden
 
 ## 1.0.1 – 2026-09-18
 
