@@ -2,6 +2,8 @@
 
 ## Unveröffentlicht
 
+## 1.1.0 – 2026-09-20
+
 - ergänzt einen deutlich sichtbaren Hinweis, vor Wartungs-, Service- und Inbetriebnahmearbeiten auf Bypass umzuschalten; Batterieerweiterungen und deren automatische Lade-/Entladeprozedur werden als besonders wichtiges Beispiel genannt
 - ergänzt optionale Pushover-Benachrichtigungen bei Start/Neustart, verzögert erkanntem Modbus-Ausfall und Wiederherstellung
 - speichert Pushover-Zugangsdaten verdeckt im ESP32, bietet eine Testnachricht und wiederholt fehlgeschlagene Zustellungen mit einstellbarem Abstand
