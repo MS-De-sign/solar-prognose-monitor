@@ -60,7 +60,7 @@
 */
 
 namespace ConfigDefaults {
-constexpr char FIRMWARE_VERSION[] = "1.1.1";
+constexpr char FIRMWARE_VERSION[] = "1.1.2";
 constexpr char MANUFACTURER[] = "MS-De-sign / Marcus Sonntag";
 constexpr char LICENSE_TEXT[] = "PolyForm Noncommercial License 1.0.0";
 constexpr char PROJECT_URL[] = "https://github.com/MS-De-sign/solar-prognose-monitor";
@@ -99,16 +99,20 @@ constexpr uint16_t HISTORY_RETENTION_DAYS = 31;
 constexpr uint16_t PUSHOVER_FAILURE_DELAY_SECONDS = 60;
 constexpr uint16_t PUSHOVER_RETRY_MINUTES = 15;
 constexpr char PUSHOVER_ENDPOINT[] = "https://api.pushover.net/1/messages.json";
+constexpr char GITHUB_LATEST_RELEASE_ENDPOINT[] =
+    "https://api.github.com/repos/MS-De-sign/solar-prognose-monitor/releases/latest";
+constexpr uint32_t VERSION_CHECK_INTERVAL_SECONDS = 24UL * 60UL * 60UL;
+constexpr uint32_t VERSION_CHECK_RETRY_MS = 6UL * 60UL * 60UL * 1000UL;
 constexpr char HISTORY_PARTITION_LABEL[] = "history";
 constexpr char HISTORY_DIRECTORY[] = "/history";
 constexpr char PROFILE_PARTITION_LABEL[] = "profile";
 }  // namespace ConfigDefaults
 
-// Vertrauensanker fuer die verifizierte TLS-Verbindung zu api.pushover.net.
+// Vertrauensanker fuer die verifizierte TLS-Verbindung zu Pushover.
 // Quelle: DigiCert Global Root G2, SHA-256
 // CB:3C:CB:B7:60:31:E5:E0:13:8F:8D:D3:9A:23:F9:DE:
 // 47:FF:C3:5E:43:C1:14:4C:EA:27:D4:6A:5A:B1:CB:5F
-const char PUSHOVER_ROOT_CA[] PROGMEM = R"PEM(-----BEGIN CERTIFICATE-----
+const char DIGICERT_GLOBAL_ROOT_G2[] PROGMEM = R"PEM(-----BEGIN CERTIFICATE-----
 MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh
 MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
 d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBH
@@ -129,6 +133,26 @@ Fdtom/DzMNU+MeKNhJ7jitralj41E6Vf8PlwUHBHQRFXGU7Aj64GxJUTFy8bJZ91
 8rGOmaFvE7FBcf6IKshPECBV1/MUReXgRPTqh5Uykw7+U0b6LJ3/iyK5S9kJRaTe
 pLiaWN0bfVKfjllDiIGknibVb63dDcY3fe0Dkhvld1927jyNxF1WW6LZZm6zNTfl
 MrY=
+-----END CERTIFICATE-----
+)PEM";
+
+// Vertrauensanker fuer api.github.com.
+// Quelle: Sectigo USERTrust ECC Certification Authority, SHA-256
+// 4F:F4:60:D5:4B:9C:86:DA:BF:BC:FC:57:12:E0:40:0D:
+// 2B:ED:3F:BC:4D:4F:BD:AA:86:E0:6A:DC:D2:A9:AD:7A
+const char USERTRUST_ECC_ROOT_CA[] PROGMEM = R"PEM(-----BEGIN CERTIFICATE-----
+MIICjzCCAhWgAwIBAgIQXIuZxVqUxdJxVt7NiYDMJjAKBggqhkjOPQQDAzCBiDELMAkGA1UEBhMC
+VVMxEzARBgNVBAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0plcnNleSBDaXR5MR4wHAYDVQQKExVU
+aGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNVBAMTJVVTRVJUcnVzdCBFQ0MgQ2VydGlmaWNhdGlv
+biBBdXRob3JpdHkwHhcNMTAwMjAxMDAwMDAwWhcNMzgwMTE4MjM1OTU5WjCBiDELMAkGA1UEBhMC
+VVMxEzARBgNVBAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0plcnNleSBDaXR5MR4wHAYDVQQKExVU
+aGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNVBAMTJVVTRVJUcnVzdCBFQ0MgQ2VydGlmaWNhdGlv
+biBBdXRob3JpdHkwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAAQarFRaqfloI+d61SRvU8Za2EurxtW2
+0eZzca7dnNYMYf3boIkDuAUU7FfO7l0/4iGzzvfUinngo4N+LZfQYcTxmdwlkWOrfzCjtHDix6Ez
+nPO/LlxTsV+zfTJ/ijTjeXmjQjBAMB0GA1UdDgQWBBQ64QmG1M8ZwpZ2dEl23OA1xmNjmjAOBgNV
+HQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAwNoADBlAjA2Z6EWCNzklwBB
+HU6+4WMBzzuqQhFkoJ2UOQIReVx7Hfpkue4WQrO/isIJxOzksU0CMQDpKmFHjFJKS04YcPbWRNZu
+9YO6bVi9JNlWSOrvxKJGgYhqOkbRqZtNyWHa0V1Xahg=
 -----END CERTIFICATE-----
 )PEM";
 
@@ -485,6 +509,7 @@ struct AppConfig {
   bool pushoverNotifyGrid;
   bool pushoverDailyPv;
   bool pushoverDailyBattery;
+  bool pushoverNotifyUpdate;
 } config;
 
 enum class ModbusMode : uint8_t {
@@ -694,7 +719,8 @@ enum class PushoverEvent : uint8_t {
   MODBUS_RESTORED,
   GRID_OUTAGE,
   GRID_RESTORED,
-  DAILY_REPORT
+  DAILY_REPORT,
+  UPDATE_AVAILABLE
 };
 
 PushoverEvent pendingPushoverEvent = PushoverEvent::NONE;
@@ -713,8 +739,17 @@ bool pushoverGridOutageDelivered = false;
 bool pushoverGridRecoveryNeeded = false;
 uint32_t pushoverLastDailyReportDate = 0;
 uint32_t pendingPushoverDailyReportDate = 0;
+String latestReleaseVersion;
+String latestReleaseUrl;
+String lastNotifiedReleaseVersion;
+String pendingPushoverUpdateVersion;
+String versionCheckStatus = "Noch nicht geprüft";
+uint32_t lastVersionCheckEpoch = 0;
+uint32_t nextVersionCheckAttemptAt = 0;
+bool pushoverUpdateNotificationNeeded = false;
 
 bool timeReached(uint32_t target);
+bool jsonString(const String &json, const String &key, String &value, int fromIndex);
 
 void appendWebDebug(const String &text) {
   if (!webDebugEnabled) return;
@@ -773,6 +808,122 @@ bool systemTimeIsValid() {
   return time(nullptr) >= 1704067200;  // 01.01.2024; fuer die TLS-Zertifikatspruefung erforderlich
 }
 
+bool parseSemanticVersion(String version, uint32_t parts[3]) {
+  version.trim();
+  if (version.startsWith("v") || version.startsWith("V")) version.remove(0, 1);
+  int position = 0;
+  for (uint8_t part = 0; part < 3; ++part) {
+    const int separator = part < 2 ? version.indexOf('.', position) : static_cast<int>(version.length());
+    if (separator <= position) return false;
+    uint32_t value = 0;
+    for (int i = position; i < separator; ++i) {
+      const char c = version[i];
+      if (c < '0' || c > '9') return false;
+      value = value * 10U + static_cast<uint32_t>(c - '0');
+      if (value > 65535U) return false;
+    }
+    parts[part] = value;
+    position = separator + 1;
+  }
+  return position == static_cast<int>(version.length()) + 1;
+}
+
+bool releaseVersionIsNewer(const String &candidate, const String &installed) {
+  uint32_t candidateParts[3] = {};
+  uint32_t installedParts[3] = {};
+  if (!parseSemanticVersion(candidate, candidateParts)
+      || !parseSemanticVersion(installed, installedParts)) return false;
+  for (uint8_t i = 0; i < 3; ++i) {
+    if (candidateParts[i] != installedParts[i]) return candidateParts[i] > installedParts[i];
+  }
+  return false;
+}
+
+void persistVersionCheckState(bool includeNotificationVersion = false) {
+  preferences.begin("sungrow", false);
+  preferences.putUInt("pocheck", lastVersionCheckEpoch);
+  preferences.putString("polatest", latestReleaseVersion);
+  if (includeNotificationVersion) {
+    preferences.putString("polastver", lastNotifiedReleaseVersion);
+  }
+  preferences.end();
+}
+
+bool checkLatestGitHubRelease() {
+  if (WiFi.status() != WL_CONNECTED) {
+    versionCheckStatus = "Kein Heim-WLAN verbunden";
+    return false;
+  }
+  if (!systemTimeIsValid()) {
+    versionCheckStatus = "Systemzeit noch nicht per NTP synchronisiert";
+    return false;
+  }
+
+  NetworkClientSecure secureClient;
+  secureClient.setCACert(USERTRUST_ECC_ROOT_CA);
+  HTTPClient http;
+  http.setConnectTimeout(8000);
+  http.setTimeout(12000);
+  if (!http.begin(secureClient, ConfigDefaults::GITHUB_LATEST_RELEASE_ENDPOINT)) {
+    versionCheckStatus = "GitHub-HTTPS-Verbindung konnte nicht vorbereitet werden";
+    return false;
+  }
+  http.addHeader("Accept", "application/vnd.github+json");
+  http.addHeader("X-GitHub-Api-Version", "2022-11-28");
+  http.addHeader("User-Agent", "Solar-Prognose-Monitor/" + String(ConfigDefaults::FIRMWARE_VERSION));
+  const int responseCode = http.GET();
+  const String response = responseCode == HTTP_CODE_OK ? http.getString() : String();
+  http.end();
+  if (responseCode != HTTP_CODE_OK) {
+    versionCheckStatus = responseCode > 0
+        ? "GitHub antwortete mit HTTP " + String(responseCode)
+        : "GitHub-HTTPS-Fehler: " + HTTPClient::errorToString(responseCode);
+    return false;
+  }
+
+  String tag;
+  if (!jsonString(response, "tag_name", tag, 0)) {
+    versionCheckStatus = "GitHub-Antwort enthält keine gültigen Release-Daten";
+    return false;
+  }
+  uint32_t versionParts[3] = {};
+  if (!parseSemanticVersion(tag, versionParts)) {
+    versionCheckStatus = "GitHub meldet eine ungültige Versionsnummer";
+    return false;
+  }
+  tag.trim();
+  if (tag.startsWith("v") || tag.startsWith("V")) tag.remove(0, 1);
+  latestReleaseVersion = tag;
+  latestReleaseUrl = String(ConfigDefaults::PROJECT_URL) + "/releases/tag/v" + latestReleaseVersion;
+  lastVersionCheckEpoch = static_cast<uint32_t>(time(nullptr));
+  const bool newer = releaseVersionIsNewer(latestReleaseVersion, ConfigDefaults::FIRMWARE_VERSION);
+  versionCheckStatus = newer
+      ? "Neue Version " + latestReleaseVersion + " verfügbar"
+      : "Installierte Version ist aktuell";
+  if (newer && config.pushoverNotifyUpdate
+      && lastNotifiedReleaseVersion != latestReleaseVersion) {
+    pushoverUpdateNotificationNeeded = true;
+  }
+  persistVersionCheckState();
+  debugPrintln("GitHub-Versionsprüfung: " + versionCheckStatus + ".");
+  return true;
+}
+
+void serviceVersionCheck() {
+  if (!config.pushoverNotifyUpdate || !pushoverConfigured()
+      || WiFi.status() != WL_CONNECTED || !systemTimeIsValid()) return;
+  const uint32_t nowEpoch = static_cast<uint32_t>(time(nullptr));
+  if (lastVersionCheckEpoch != 0 && nowEpoch >= lastVersionCheckEpoch
+      && nowEpoch - lastVersionCheckEpoch < ConfigDefaults::VERSION_CHECK_INTERVAL_SECONDS) return;
+  if (nextVersionCheckAttemptAt != 0 && !timeReached(nextVersionCheckAttemptAt)) return;
+  if (checkLatestGitHubRelease()) {
+    nextVersionCheckAttemptAt = 0;
+  } else {
+    nextVersionCheckAttemptAt = millis() + ConfigDefaults::VERSION_CHECK_RETRY_MS;
+    debugPrintln("GitHub-Versionsprüfung: " + versionCheckStatus + "; späterer Wiederholungsversuch.");
+  }
+}
+
 String formUrlEncode(const String &input) {
   static const char HEX_DIGITS[] = "0123456789ABCDEF";
   String output;
@@ -815,7 +966,7 @@ bool sendPushoverMessage(const String &appToken, const String &userKey, const St
   if (!device.isEmpty()) body += "&device=" + formUrlEncode(device);
 
   NetworkClientSecure secureClient;
-  secureClient.setCACert(PUSHOVER_ROOT_CA);
+  secureClient.setCACert(DIGICERT_GLOBAL_ROOT_G2);
   HTTPClient http;
   http.setConnectTimeout(8000);
   http.setTimeout(10000);
@@ -1015,6 +1166,16 @@ void servicePushover() {
                            + lastModbusTransport);
   }
   queuePushoverDailyReportIfDue();
+  if (pendingPushoverEvent == PushoverEvent::NONE && config.pushoverNotifyUpdate
+      && pushoverUpdateNotificationNeeded
+      && lastNotifiedReleaseVersion != latestReleaseVersion) {
+    pendingPushoverUpdateVersion = latestReleaseVersion;
+    queuePushoverEvent(PushoverEvent::UPDATE_AVAILABLE,
+                       "Solar Prognose Monitor: Neue Firmware verfügbar",
+                       "Installiert: " + String(ConfigDefaults::FIRMWARE_VERSION)
+                           + "\nVerfügbar: " + latestReleaseVersion
+                           + "\nDownload: " + latestReleaseUrl);
+  }
   if (pendingPushoverEvent == PushoverEvent::NONE && config.pushoverNotifyStartup
       && pushoverBootPending) {
     queuePushoverEvent(PushoverEvent::STARTED, "Solar Prognose Monitor gestartet",
@@ -1049,6 +1210,12 @@ void servicePushover() {
       preferences.begin("sungrow", false);
       preferences.putUInt("polastday", pushoverLastDailyReportDate);
       preferences.end();
+    }
+    if (deliveredEvent == PushoverEvent::UPDATE_AVAILABLE) {
+      lastNotifiedReleaseVersion = pendingPushoverUpdateVersion;
+      pendingPushoverUpdateVersion = "";
+      pushoverUpdateNotificationNeeded = false;
+      persistVersionCheckState(true);
     }
     lastPushoverStatus = status;
     debugPrintln("Pushover: " + status + ".");
@@ -1394,7 +1561,11 @@ void loadConfig() {
   config.pushoverNotifyGrid = preferences.getBool("pogrid", false);
   config.pushoverDailyPv = preferences.getBool("podailypv", false);
   config.pushoverDailyBattery = preferences.getBool("podailybat", false);
+  config.pushoverNotifyUpdate = preferences.getBool("poupdate", false);
   pushoverLastDailyReportDate = preferences.getUInt("polastday", 0);
+  lastVersionCheckEpoch = preferences.getUInt("pocheck", 0);
+  latestReleaseVersion = preferences.getString("polatest", "");
+  lastNotifiedReleaseVersion = preferences.getString("polastver", "");
   config.forecastEnabled = preferences.getBool("fcen", config.forecastEnabled);
   config.forecastBypass = preferences.getBool("fcbypass", config.forecastBypass);
   config.latitude = preferences.getFloat("lat", config.latitude);
@@ -1484,6 +1655,18 @@ void loadConfig() {
   }
   preferences.end();
 
+  uint32_t storedReleaseParts[3] = {};
+  if (!latestReleaseVersion.isEmpty()
+      && parseSemanticVersion(latestReleaseVersion, storedReleaseParts)) {
+    latestReleaseUrl = String(ConfigDefaults::PROJECT_URL) + "/releases/tag/v" + latestReleaseVersion;
+    versionCheckStatus = releaseVersionIsNewer(latestReleaseVersion, ConfigDefaults::FIRMWARE_VERSION)
+        ? "Zuletzt gefundene Version: " + latestReleaseVersion
+        : "Installierte Version war bei der letzten Prüfung aktuell";
+  } else {
+    latestReleaseVersion = "";
+    lastVersionCheckEpoch = 0;
+  }
+
   if (config.modbusPort == 0) config.modbusPort = ConfigDefaults::MODBUS_PORT;
   if (config.inverterUnit == 0) config.inverterUnit = ConfigDefaults::MODBUS_UNIT;
   if (config.batteryTcpUnit == 0) config.batteryTcpUnit = ConfigDefaults::BATTERY_TCP_UNIT;
@@ -1529,7 +1712,11 @@ void saveConfig() {
   preferences.putBool("pogrid", config.pushoverNotifyGrid);
   preferences.putBool("podailypv", config.pushoverDailyPv);
   preferences.putBool("podailybat", config.pushoverDailyBattery);
+  preferences.putBool("poupdate", config.pushoverNotifyUpdate);
   preferences.putUInt("polastday", pushoverLastDailyReportDate);
+  preferences.putUInt("pocheck", lastVersionCheckEpoch);
+  preferences.putString("polatest", latestReleaseVersion);
+  preferences.putString("polastver", lastNotifiedReleaseVersion);
   preferences.putBool("fcen", config.forecastEnabled);
   preferences.putBool("fcbypass", config.forecastBypass);
   preferences.putFloat("lat", config.latitude);
@@ -4034,7 +4221,9 @@ void handleSettings() {
   if (config.pushoverDailyPv) part += F(" checked");
   part += F("> Gesamter produzierter PV-Strom des Tages (PV-Tagesertrag, Register 13001)</label><label class='check full'><input type='checkbox' name='poDailyBat' value='1'");
   if (config.pushoverDailyBattery) part += F(" checked");
-  part += F("> Ladestufe des Speichers (absoluter Batteriestand, Register 10743)</label></div></div></details></div><div class='full'><p class='hint'>Die Ausfallverzögerung gilt sowohl für den Modbus- als auch für den gemeldeten Netzausfall. Der Netzstatus wird über Sungrow Grid state 13030 ausgewertet; unterstützt ein Gerät dieses Register nicht, bleibt nur diese Meldungsart ohne Funktion.</p><label class='check'><input type='checkbox' name='poClear' value='1'> Gespeicherte Pushover-Zugangsdaten löschen</label></div><div class='full'><button id='poTest' class='button secondary' type='button'>Testnachricht senden</button><span id='poResult' class='result'>");
+  part += F("> Ladestufe des Speichers (absoluter Batteriestand, Register 10743)</label><label class='check full'><input type='checkbox' name='poUpdate' value='1'");
+  if (config.pushoverNotifyUpdate) part += F(" checked");
+  part += F("> Neue Firmwareversion auf GitHub verfügbar</label></div></div></details></div><div class='full'><p class='hint'>Die Versionsprüfung fragt höchstens einmal täglich das neueste öffentliche GitHub-Release ab und meldet jede neue Version genau einmal. Es wird keine Firmware automatisch installiert. Die Ausfallverzögerung gilt sowohl für den Modbus- als auch für den gemeldeten Netzausfall. Der Netzstatus wird über Sungrow Grid state 13030 ausgewertet; unterstützt ein Gerät dieses Register nicht, bleibt nur diese Meldungsart ohne Funktion.</p><label class='check'><input type='checkbox' name='poClear' value='1'> Gespeicherte Pushover-Zugangsdaten löschen</label></div><div class='full'><button id='poTest' class='button secondary' type='button'>Testnachricht senden</button><span id='poResult' class='result'>");
   part += htmlEscape(lastPushoverStatus);
   part += F("</span><p class='hint'>Die Testnachricht verwendet neue Eingaben direkt, ohne sie zu speichern; leere Felder verwenden bereits gespeicherte Zugangsdaten. Die Verbindung zu Pushover wird per HTTPS mit Zertifikatsprüfung aufgebaut. Ist ESP32, Router oder Internet stromlos, kann keine Sofortmeldung versendet werden; nach dem Neustart folgt die Startmeldung.</p></div></div></section><button class='button' type='submit'>Speichern und neu starten</button></form><section class='card info'><h2>Verbindung</h2><b>Access Point:</b> ");
   part += htmlEscape(accessPointSsid);
@@ -4074,6 +4263,7 @@ float boundedFloatArgument(const String &name, float fallback, float minimum, fl
 void handleSave() {
   const bool bypassWasActive = config.forecastEnabled && config.forecastBypass;
   const bool rippleWasEnabled = config.rippleEnabled;
+  const bool updateNotificationWasEnabled = config.pushoverNotifyUpdate;
   const uint8_t previousMaxSoc = config.maxSoc;
   forceAllStagesOff(true);
   if (server.hasArg("clearWifi")) {
@@ -4116,6 +4306,10 @@ void handleSave() {
   config.pushoverNotifyGrid = server.hasArg("poGrid");
   config.pushoverDailyPv = server.hasArg("poDailyPv");
   config.pushoverDailyBattery = server.hasArg("poDailyBat");
+  config.pushoverNotifyUpdate = server.hasArg("poUpdate");
+  if (config.pushoverNotifyUpdate && !updateNotificationWasEnabled) {
+    lastVersionCheckEpoch = 0;  // Nach dem Aktivieren direkt nach einer neuen Version suchen.
+  }
 
   config.modbusHost = server.arg("host");
   config.modbusHost.trim();
@@ -4661,7 +4855,7 @@ const char FIRMWARE_HTML[] PROGMEM = R"HTML(
 )HTML";
 
 const char ABOUT_HTML[] PROGMEM = R"HTML(
-<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>About · Solar Prognose Monitor</title><style>:root{--bg:#f3f5f7;--text:#17212b;--muted:#64717d;--accent:#087f5b;--line:#dfe4e8}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{background:#fff;border-bottom:1px solid var(--line)}.bar{max-width:1120px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}.nav{display:flex;gap:6px;overflow-x:auto}.nav a{white-space:nowrap;color:var(--text);text-decoration:none;padding:8px 10px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}main{max-width:1120px;margin:22px auto;padding:0 18px}.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;border-bottom:1px solid var(--line)}th{width:180px;color:var(--muted)}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.check{display:flex;gap:8px;align-items:center}.button{border:0;border-radius:9px;background:#66727d;color:#fff;padding:10px 14px;font:inherit;font-weight:650;cursor:pointer}.muted{color:var(--muted)}.legal{line-height:1.6}.legal a{color:var(--accent)}pre{height:50vh;overflow:auto;background:#111820;color:#d8f5e8;border-radius:9px;padding:13px;white-space:pre-wrap;word-break:break-word;font:12px ui-monospace,SFMono-Regular,Consolas,monospace}@media(max-width:800px){.bar{align-items:flex-start;flex-wrap:wrap}.nav{width:100%}}</style></head><body><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a class="active" href="/about">About</a></nav></div></header><main><section class="card"><h2>About</h2><table><tr><th>Produkt</th><td>Solar Prognose Monitor</td></tr><tr><th>Firmware-Version</th><td><b>{{VERSION}}</b></td></tr><tr><th>Hersteller</th><td>{{MANUFACTURER}}</td></tr><tr><th>Lizenz</th><td>{{LICENSE}}</td></tr><tr><th>Chip</th><td>{{CHIP}}</td></tr><tr><th>Flash-Speicher</th><td>{{FLASH}}</td></tr><tr><th>Aktiver OTA-Slot</th><td>{{APP}}</td></tr><tr><th>System-NVS</th><td>{{NVS}}</td></tr><tr><th>Profil-NVS</th><td>{{PROFILE_NVS}}</td></tr><tr><th>Verlaufsspeicher</th><td>{{HISTORY}}</td></tr><tr><th>Quellcode / Projekt</th><td><a href="{{PROJECT_URL}}">GitHub-Repository</a></td></tr></table></section><section class="card legal"><h2>Lizenz und Haftung</h2><p>Diese Software ist für erlaubte nichtkommerzielle Zwecke unter der <b>PolyForm Noncommercial License 1.0.0</b> (<code>PolyForm-Noncommercial-1.0.0</code>) verfügbar. Kommerzielle oder gewerbliche Nutzung benötigt eine separate schriftliche Genehmigung oder Lizenzvereinbarung. <a href="{{PROJECT_URL}}/blob/main/LICENSE">Lizenztext</a> · <a href="{{PROJECT_URL}}/blob/main/COMMERCIAL-LICENSE.md">kommerzielle Lizenzierung</a></p><p>Die Software wird ohne Gewährleistung bereitgestellt. Installation, Konfiguration und Nutzung erfolgen auf eigene Gefahr. Arbeiten an Netzspannung und leistungsführenden Anlagenteilen dürfen nur durch entsprechend qualifizierte Fachkräfte erfolgen.</p><p>Dies ist ein unabhängiges, source-available Projekt und steht in keiner Verbindung zu Sungrow Power Supply Co., Ltd. Es wird von Sungrow weder unterstützt noch gesponsert oder empfohlen. Produktnamen, Logos und Marken gehören ihren jeweiligen Rechteinhabern.</p></section><section class="card"><h2>Web-Debug</h2><div class="row"><label class="check"><input id="toggle" type="checkbox"> Programmmeldungen im RAM puffern</label><button id="clear" class="button">Puffer leeren</button><span class="muted">Maximal 12.000 Zeichen. Frühe Boot-ROM-Ausgaben können nicht erfasst werden.</span></div><pre id="log">Wird geladen …</pre></section></main><script>const toggle=document.querySelector('#toggle'),log=document.querySelector('#log');const load=async()=>{const r=await fetch('/api/debug',{cache:'no-store'}),t=await r.text();log.textContent=t;log.scrollTop=log.scrollHeight};toggle.addEventListener('change',async()=>{await fetch('/api/debug/toggle',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'enabled='+(toggle.checked?'1':'0')});load()});document.querySelector('#clear').addEventListener('click',async()=>{await fetch('/api/debug/clear',{method:'POST'});load()});fetch('/api/debug/status').then(r=>r.json()).then(x=>{toggle.checked=x.enabled;load()});setInterval(load,2000)</script></body></html>
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>About · Solar Prognose Monitor</title><style>:root{--bg:#f3f5f7;--text:#17212b;--muted:#64717d;--accent:#087f5b;--line:#dfe4e8}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{background:#fff;border-bottom:1px solid var(--line)}.bar{max-width:1120px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}.nav{display:flex;gap:6px;overflow-x:auto}.nav a{white-space:nowrap;color:var(--text);text-decoration:none;padding:8px 10px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}main{max-width:1120px;margin:22px auto;padding:0 18px}.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;border-bottom:1px solid var(--line)}th{width:180px;color:var(--muted)}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.check{display:flex;gap:8px;align-items:center}.button{border:0;border-radius:9px;background:#66727d;color:#fff;padding:10px 14px;font:inherit;font-weight:650;cursor:pointer}.muted{color:var(--muted)}.legal{line-height:1.6}.legal a,.card a{color:var(--accent)}pre{height:50vh;overflow:auto;background:#111820;color:#d8f5e8;border-radius:9px;padding:13px;white-space:pre-wrap;word-break:break-word;font:12px ui-monospace,SFMono-Regular,Consolas,monospace}@media(max-width:800px){.bar{align-items:flex-start;flex-wrap:wrap}.nav{width:100%}}</style></head><body><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a class="active" href="/about">About</a></nav></div></header><main><section class="card"><h2>About</h2><table><tr><th>Produkt</th><td>Solar Prognose Monitor</td></tr><tr><th>Firmware-Version</th><td><b>{{VERSION}}</b></td></tr><tr><th>Hersteller</th><td>{{MANUFACTURER}}</td></tr><tr><th>Lizenz</th><td>{{LICENSE}}</td></tr><tr><th>Chip</th><td>{{CHIP}}</td></tr><tr><th>Flash-Speicher</th><td>{{FLASH}}</td></tr><tr><th>Aktiver OTA-Slot</th><td>{{APP}}</td></tr><tr><th>System-NVS</th><td>{{NVS}}</td></tr><tr><th>Profil-NVS</th><td>{{PROFILE_NVS}}</td></tr><tr><th>Verlaufsspeicher</th><td>{{HISTORY}}</td></tr><tr><th>Quellcode / Projekt</th><td><a href="{{PROJECT_URL}}">GitHub-Repository</a></td></tr></table></section><section class="card"><h2>Firmware-Version prüfen</h2><table><tr><th>Installiert</th><td>{{VERSION}}</td></tr><tr><th>Zuletzt auf GitHub gefunden</th><td>{{LATEST_VERSION}}</td></tr><tr><th>Letzte erfolgreiche Prüfung</th><td>{{VERSION_CHECK_TIME}}</td></tr><tr><th>Status</th><td id="versionStatus">{{VERSION_CHECK_STATUS}}</td></tr></table><div class="row"><button id="versionCheck" class="button" type="button">Jetzt prüfen</button><a href="{{PROJECT_URL}}/releases/latest">Neuestes Release auf GitHub öffnen</a></div></section><section class="card legal"><h2>Lizenz und Haftung</h2><p>Diese Software ist für erlaubte nichtkommerzielle Zwecke unter der <b>PolyForm Noncommercial License 1.0.0</b> (<code>PolyForm-Noncommercial-1.0.0</code>) verfügbar. Kommerzielle oder gewerbliche Nutzung benötigt eine separate schriftliche Genehmigung oder Lizenzvereinbarung. <a href="{{PROJECT_URL}}/blob/main/LICENSE">Lizenztext</a> · <a href="{{PROJECT_URL}}/blob/main/COMMERCIAL-LICENSE.md">kommerzielle Lizenzierung</a></p><p>Die Software wird ohne Gewährleistung bereitgestellt. Installation, Konfiguration und Nutzung erfolgen auf eigene Gefahr. Arbeiten an Netzspannung und leistungsführenden Anlagenteilen dürfen nur durch entsprechend qualifizierte Fachkräfte erfolgen.</p><p>Dies ist ein unabhängiges, source-available Projekt und steht in keiner Verbindung zu Sungrow Power Supply Co., Ltd. Es wird von Sungrow weder unterstützt noch gesponsert oder empfohlen. Produktnamen, Logos und Marken gehören ihren jeweiligen Rechteinhabern.</p></section><section class="card"><h2>Web-Debug</h2><div class="row"><label class="check"><input id="toggle" type="checkbox"> Programmmeldungen im RAM puffern</label><button id="clear" class="button">Puffer leeren</button><span class="muted">Maximal 12.000 Zeichen. Frühe Boot-ROM-Ausgaben können nicht erfasst werden.</span></div><pre id="log">Wird geladen …</pre></section></main><script>const toggle=document.querySelector('#toggle'),log=document.querySelector('#log'),versionStatus=document.querySelector('#versionStatus');const load=async()=>{const r=await fetch('/api/debug',{cache:'no-store'}),t=await r.text();log.textContent=t;log.scrollTop=log.scrollHeight};toggle.addEventListener('change',async()=>{await fetch('/api/debug/toggle',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'enabled='+(toggle.checked?'1':'0')});load()});document.querySelector('#clear').addEventListener('click',async()=>{await fetch('/api/debug/clear',{method:'POST'});load()});document.querySelector('#versionCheck').addEventListener('click',async()=>{versionStatus.textContent='GitHub wird geprüft …';try{const r=await fetch('/api/version-check',{method:'POST'}),t=await r.text();versionStatus.textContent=t;if(r.ok)setTimeout(()=>location.reload(),1000)}catch(e){versionStatus.textContent='Fehler: '+e.message}});fetch('/api/debug/status').then(r=>r.json()).then(x=>{toggle.checked=x.enabled;load()});setInterval(load,2000)</script></body></html>
 )HTML";
 
 void handleFirmwarePage() {
@@ -4671,6 +4865,13 @@ void handleFirmwarePage() {
       F("Für eine Neuinstallation auf einem frischen ESP32 ist Version 1.0.1 oder neuer erforderlich; Version 1.0.0 konnte dort wegen eines falschen App-Offsets nicht starten. Eine USB-Komplett-/Factory-Datei ist nur für Neuinstallationen gedacht und löscht vorhandene Daten. Bereits laufende Geräte erhalten die passende normale Update-Datei über diese Seite."));
   addNoCacheHeaders();
   server.send(200, "text/html; charset=utf-8", page);
+}
+
+void handleVersionCheck() {
+  const bool success = checkLatestGitHubRelease();
+  nextVersionCheckAttemptAt = success ? 0 : millis() + ConfigDefaults::VERSION_CHECK_RETRY_MS;
+  addNoCacheHeaders();
+  server.send(success ? 200 : 502, "text/plain; charset=utf-8", versionCheckStatus);
 }
 
 void handleAboutPage() {
@@ -4685,6 +4886,11 @@ void handleAboutPage() {
   page.replace("{{MANUFACTURER}}", ConfigDefaults::MANUFACTURER);
   page.replace("{{LICENSE}}", ConfigDefaults::LICENSE_TEXT);
   page.replace("{{PROJECT_URL}}", ConfigDefaults::PROJECT_URL);
+  page.replace("{{LATEST_VERSION}}", latestReleaseVersion.isEmpty()
+      ? String("noch nicht geprüft") : htmlEscape(latestReleaseVersion));
+  page.replace("{{VERSION_CHECK_TIME}}", lastVersionCheckEpoch == 0
+      ? String("noch nicht geprüft") : formatLocalTime(static_cast<time_t>(lastVersionCheckEpoch), true));
+  page.replace("{{VERSION_CHECK_STATUS}}", htmlEscape(versionCheckStatus));
   page.replace("{{CHIP}}", String(ESP.getChipModel()) + " · " + String(ESP.getChipCores()) + " Kerne");
   page.replace("{{FLASH}}", String(ESP.getFlashChipSize() / (1024UL * 1024UL)) + " MB");
   page.replace("{{APP}}", running ? String(running->label) + " · " + String(running->size / 1024UL) + " KB" : String("nicht erkannt"));
@@ -4898,6 +5104,7 @@ void startWebServer() {
   server.on("/api/load-profile/reset", HTTP_POST, handleLoadProfileReset);
   server.on("/api/history", HTTP_GET, handleHistoryApi);
   server.on("/api/pushover/test", HTTP_POST, handlePushoverTest);
+  server.on("/api/version-check", HTTP_POST, handleVersionCheck);
   server.on("/about", HTTP_GET, handleAboutPage);
   server.on("/debug", HTTP_GET, handleLegacyDebugPage);
   server.on("/api/debug", HTTP_GET, handleDebugLog);
@@ -4970,6 +5177,7 @@ void solarPrognoseMonitorLoop() {
     serviceHistory();
     serviceForecastCharging();
     servicePushover();
+    serviceVersionCheck();
   }
 
   if (restartAt != 0 && timeReached(restartAt)) {

@@ -1,6 +1,6 @@
 # Vollständige Bedienungsanleitung
 
-Stand: Firmware **1.1.1**
+Stand: Firmware **1.1.2**
 
 Diese Anleitung beschreibt jede Seite und jedes sichtbare Bedien- oder Anzeigefeld des Solar Prognose Monitors. Die mathematischen Hintergründe stehen bewusst gesammelt im letzten Kapitel. Die erste Geräteintegration unterstützt Sungrow-Wechselrichter und -Batteriespeicher.
 
@@ -243,12 +243,13 @@ Nur aktivierte Stufen werden in Nummernreihenfolge addiert. Sind nur Stufe 1 mit
 | Application/API Token | 30-stelliger Schlüssel einer selbst angelegten Pushover-Anwendung. Ein leeres Feld behält den gespeicherten Wert. Er wird nach dem Speichern nicht mehr angezeigt. |
 | User-/Group-Key | 30-stelliger Empfängerschlüssel des eigenen Pushover-Kontos oder einer Gruppe. Ein leeres Feld behält den gespeicherten Wert. |
 | Gerät | Optionaler Pushover-Gerätename. Leer sendet an alle Geräte des Empfängers. |
-| Nachrichten auswählen | Ausklappbereich mit einzelnen Schaltern für Start, Modbus, Netzstatus sowie beide Werte des Tagesberichts. |
+| Nachrichten auswählen | Ausklappbereich mit einzelnen Schaltern für Start, Modbus, Netzstatus, neue Firmware sowie beide Werte des Tagesberichts. |
 | Start oder Neustart | Meldet den erfolgreichen Start, sobald WLAN, Internet und gültige Uhrzeit verfügbar sind. |
 | Modbus-Ausfall und Wiederherstellung | Meldet eine anhaltend fehlende Wechselrichterantwort und die erste erfolgreiche Abfrage danach. |
 | Stromnetzausfall und Netzwiederkehr | Wertet `Grid state` 13030 aus: `0xAA` gilt als Inselbetrieb/Netzausfall, `0x55` als Netzbetrieb. |
 | PV-Strom des Tages | Nimmt den PV-Tagesertrag 13001 in den einmaligen Sonnenuntergangsbericht auf. |
 | Ladestufe des Speichers | Nimmt den absoluten Batteriestand 10743 bei Sonnenuntergang in den Tagesbericht auf. |
+| Neue Firmwareversion | Prüft höchstens einmal täglich das neueste veröffentlichte GitHub-Release und meldet eine numerisch höhere Version genau einmal. |
 | Ausfall melden nach | Ein Modbusfehler oder gemeldeter Netzausfall muss zwischen 10 und 3.600 Sekunden ununterbrochen bestehen, bevor einmalig eine Ausfallmeldung eingeplant wird. Kurze Störungen lösen dadurch keine Meldung aus. |
 | Wiederholungsversuch nach Sendefehler | Abstand von 1 bis 1.440 Minuten, bevor eine nicht zugestellte Nachricht erneut versucht wird. Erfolgreich gemeldete Zustandswechsel werden nicht laufend wiederholt. |
 | Zugangsdaten löschen | Deaktiviert Pushover und entfernt Token, User-Key sowie Gerätename dauerhaft. |
@@ -258,11 +259,14 @@ Je nach Auswahl werden gemeldet:
 
 - Start oder Neustart des ESP32, sobald Heim-WLAN, Internet und eine per NTP gültige Uhrzeit verfügbar sind,
 - ein länger als die eingestellte Verzögerung bestehender Ausfall der Wechselrichter-Modbusabfrage,
-- die erste erfolgreiche Modbusabfrage nach einem bereits gemeldeten Ausfall.
+- die erste erfolgreiche Modbusabfrage nach einem bereits gemeldeten Ausfall,
 - Inselbetrieb/Netzausfall und die Rückkehr in den Netzbetrieb über Sungrow `Grid state`,
-- einmal nach dem von Open-Meteo gelieferten Sonnenuntergang ein gemeinsamer Tagesbericht mit den ausgewählten Werten.
+- einmal nach dem von Open-Meteo gelieferten Sonnenuntergang ein gemeinsamer Tagesbericht mit den ausgewählten Werten,
+- eine neu veröffentlichte stabile Firmwareversion mit installierter Version, neuer Version und Link zum GitHub-Release.
 
 Das Datum eines erfolgreich übertragenen Tagesberichts wird im dauerhaften Einstellungsspeicher abgelegt. Dadurch führt ein ESP32-Neustart am selben Abend nicht zu einem zweiten Bericht. Fehlt ein ausgewählter Messwert zum Sendezeitpunkt, nennt der Bericht ihn als „nicht verfügbar“. Unterstützt der Wechselrichter `Grid state` nicht, wird nur dieser optionale Block übersprungen; die übrige Modbusabfrage bleibt funktionsfähig.
+
+Die Versionsprüfung verwendet den öffentlichen GitHub-Endpunkt für das neueste Release und benötigt deshalb keinen im ESP32 gespeicherten GitHub-Token. Die Versionsbestandteile werden numerisch verglichen. Die zuletzt erfolgreich gemeldete neue Version bleibt im NVS gespeichert, damit Neustarts keine Wiederholungsmeldung erzeugen. GitHub- oder Internetfehler lösen keine falsche Update-Meldung aus; die automatische Prüfung wird später wiederholt. Es findet niemals eine automatische Installation statt.
 
 Die Verbindung zum offiziellen Endpunkt `https://api.pushover.net/1/messages.json` wird per HTTPS mit Zertifikatsprüfung aufgebaut. Die Schlüssel werden lokal im ESP32 gespeichert, aber Pushover ist ein externer Dienst. Für jede Installation sollte eine eigene Pushover-Anwendung verwendet werden. Ist nur die direkte Modbusverbindung gestört, kann die Ausfallmeldung gesendet werden. Für eine Nachricht während des nahtlosen Inselbetriebs müssen ESP32, Router und Internetzugang weiterhin versorgt werden; insbesondere Router und vorgeschaltete Netztechnik müssen dafür am Ersatzstrom hängen. Sind diese Geräte oder der Internetzugang ausgefallen, ist keine sofortige Nachricht möglich. Nach der Wiederkehr meldet der ESP32 seinen Neustart. Pushover ersetzt keine zertifizierte Alarm- oder Netzüberwachung.
 
@@ -302,6 +306,8 @@ ArduinoOTA ist nicht enthalten. Das Browserupdate bleibt nach der einmaligen USB
 | Profil-NVS | Größe der separaten Partition für das gelernte Lastprofil. |
 | Verlaufsspeicher | Größe und aktuelle Belegung der LittleFS-Partition. |
 | Quellcode / Projekt | Link zum vollständigen Quellcode im GitHub-Repository. |
+| Firmware-Version prüfen | Zeigt installierte und zuletzt auf GitHub gefundene Version, Zeitpunkt und Ergebnis der letzten erfolgreichen Prüfung. |
+| Jetzt prüfen | Ruft das neueste öffentliche GitHub-Release sofort per HTTPS ab. Die Schaltfläche installiert keine Firmware. |
 | Lizenz und Haftung | Erklärt die nichtkommerzielle PolyForm-Lizenz, die gesonderte kommerzielle Lizenzierung, fehlende Gewährleistung, Nutzung auf eigene Gefahr und die Unabhängigkeit von Sungrow. |
 | Programmmeldungen im RAM puffern | Aktiviert Web-Debug. Nur danach erzeugte Meldungen werden zusätzlich im RAM gesammelt. |
 | Puffer leeren | Entfernt den aktuellen Debugtext, ändert aber keine Einstellungen. |

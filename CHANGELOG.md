@@ -2,6 +2,14 @@
 
 ## Unveröffentlicht
 
+## 1.1.2 – 2026-09-20
+
+- ergänzt als abschließende Pushover-Funktion eine auswählbare Meldung über neue Firmware-Releases
+- prüft höchstens einmal täglich das neueste öffentliche GitHub-Release ohne im ESP32 gespeicherten GitHub-Token
+- vergleicht Major-, Minor- und Patchnummer numerisch und meldet jede neue Version dank dauerhaft gespeicherter Entdoppelung genau einmal
+- zeigt im About-Tab installierte und zuletzt gefundene Version, Prüfzeitpunkt und Status und bietet dort eine manuelle Prüfung
+- installiert Updates bewusst nicht automatisch; Flashgröße, Partitionsschema und Datensicherung bleiben eine kontrollierte Benutzerentscheidung
+
 ## 1.1.1 – 2026-09-20
 
 - macht Start-, Modbus- und Netzstatusmeldungen sowie die beiden Inhalte des täglichen Pushover-Berichts einzeln auswählbar
