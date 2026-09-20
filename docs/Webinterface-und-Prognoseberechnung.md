@@ -144,7 +144,7 @@ Leistungen werden intern mit 10-W-Auflösung und der SOC mit 0,1-Prozent-Auflös
 
 | Seite | Funktion |
 |---|---|
-| **Wechselrichter** | Zeigt die aktiven Wechselrichter-, Energie- und Netzübergabewerte. Zusätzlich werden die Einspeisegrenze 13073 in Prozent und der Zustand der Begrenzung 13086 angezeigt. Statusfelder melden WLAN, Modbus-Verbindung, Access Point, Überschuss-Stufen und Rundsteuerung. Das Suchfeld filtert Adresse, Name, Beschreibung und Einheit. |
+| **Wechselrichter** | Zeigt die aktiven Wechselrichter-, Energie- und Netzübergabewerte einschließlich des optionalen Netzstatus 13030. Zusätzlich werden die Einspeisegrenze 13073 in Prozent und der Zustand der Begrenzung 13086 angezeigt. Statusfelder melden WLAN, Modbus-Verbindung, Access Point, Überschuss-Stufen und Rundsteuerung. Das Suchfeld filtert Adresse, Name, Beschreibung und Einheit. |
 | **Batterie** | Zeigt SOC, SOH, Temperatur, Lade-/Entladeleistung, Kapazität und Energiezähler. Direkter SOC/SOH wird über TCP-ID 2 oder RS485-ID 200 gelesen. |
 | **Prognose** | Zeigt Betriebsart, absoluten Batteriestand und freigegebenen SOC, Holding-Werte, erwartete PV-/Last-/Batterieenergie, SOC-Fahrplan, gerasterte Freigabewerte je Uhrzeit sowie stündliche GTI-Werte aller Dachflächen. „Open-Meteo neu laden“ stößt einen neuen Abruf an. |
 | **Lastprofil** | Zeigt je Wochentag Grundlast, Großlast-Anteil, Erwartungswert, heutige Messung und Ereigniswahrscheinlichkeit in 15-Minuten-Blöcken. „Lernprofil löschen“ setzt alle Lerndaten zurück. |
@@ -192,7 +192,7 @@ RX, TX, DE/RE, aktive Stufen und Rundsteuer-Eingänge dürfen keinen GPIO doppel
 | Prognose-Sicherheitsfaktor | Bestimmt die Energiereserve; 80 % plant das Ziel nach rund 80 % der erwarteten nutzbaren Energie. |
 | PV-Systemwirkungsgrad | Pauschaler Minderungsfaktor zwischen Einstrahlung und realer PV-Leistung. |
 | Batterie-Ladewirkungsgrad | Anteil des Überschusses, der als im Akku angekommen gilt. |
-| SOC-Schrittweite | Fahrplanraster ausgehend von 50 %. Empfohlen mindestens 3 %. Kleinere Werte bleiben auswählbar, verursachen aber deutlich mehr persistente Wechselrichter-Schreibzugriffe. Verpasste Stufen werden übersprungen. |
+| SOC-Schrittweite | Fahrplanraster ausgehend von 50 %. Standard sind 10 %, um die Zahl der persistenten Wechselrichter-Schreibzugriffe zu reduzieren. Werte unter 3 % bleiben auswählbar, verursachen aber besonders viele Schreibzugriffe. Verpasste Stufen werden übersprungen. |
 | Mindestabstand Schreibzugriffe | Mindestzeit zwischen zwei prognosebedingten Änderungen. |
 | Gewünschte Schreibobergrenze pro Tag | Tageslimit für normale Änderungen. Ist für 50 % bis Max-SOC rechnerisch eine höhere Zahl erforderlich, wird die wirksame Grenze automatisch angehoben. Standard: 20. Einmalige Sicherheits-, Bypass- und abschließende Tagesfreigaben werden getrennt gezählt. |
 | Open-Meteo-Intervall | Abstand zwischen automatischen Wetterabrufen. |
@@ -231,11 +231,11 @@ Zusätzlich gilt eine feste Leistungshysterese von 150 W. Zur gemessenen Netzein
 
 ### Pushover-Benachrichtigungen
 
-Optional werden Start/Neustart, ein anhaltender Ausfall der Wechselrichter-Modbusabfrage und deren Wiederherstellung an Pushover gesendet. Dafür werden der Application/API-Token einer eigenen Pushover-Anwendung und der persönliche User-/Group-Key hinterlegt; ein Gerätebezeichner kann den Empfang auf ein Gerät begrenzen. Die beiden Schlüssel werden nach dem Speichern nicht wieder in das Webformular eingesetzt. Leere Schlüsselfelder behalten vorhandene Werte, das Löschfeld entfernt sie ausdrücklich.
+Optional werden ausgewählte Ereignisse und ein Tagesbericht an Pushover gesendet. In einem Ausklappbereich lassen sich Start/Neustart, Modbus-Ausfall/Wiederherstellung und Netzausfall/Netzwiederkehr getrennt aktivieren. Für den einmaligen Bericht nach Sonnenuntergang sind PV-Tagesertrag 13001 und absoluter Batteriestand 10743 einzeln auswählbar. Dafür werden der Application/API-Token einer eigenen Pushover-Anwendung und der persönliche User-/Group-Key hinterlegt; ein Gerätebezeichner kann den Empfang auf ein Gerät begrenzen. Die beiden Schlüssel werden nach dem Speichern nicht wieder in das Webformular eingesetzt. Leere Schlüsselfelder behalten vorhandene Werte, das Löschfeld entfernt sie ausdrücklich.
 
-Die Ausfallverzögerung unterdrückt kurze Modbusstörungen. Nach erfolgreicher Ausfallmeldung entsteht keine wiederholte Dauermeldung; nach Wiederherstellung folgt genau ein weiterer Zustandswechsel. Scheitert die HTTPS-Übertragung, bestimmt der Wiederholungsabstand den nächsten Versuch. Der Testknopf prüft neue Eingaben ohne vorheriges Speichern. Der offizielle Pushover-Endpunkt wird per HTTPS mit Zertifikatsprüfung angesprochen.
+Die Ausfallverzögerung unterdrückt kurze Modbus- und Netzstatusstörungen. Der Netzstatus stammt aus dem Sungrow-Herstellerregister 13030, das im nullbasierten Sketch als Adresse 13029 gelesen wird: `0x55` steht für Netzbetrieb, `0xAA` für Inselbetrieb/Netzausfall. Das Register ist optional, damit ältere oder abweichende Firmwarestände die übrige Abfrage nicht blockieren. Nach erfolgreicher Ausfallmeldung entsteht keine wiederholte Dauermeldung; nach Wiederherstellung folgt genau ein weiterer Zustandswechsel. Das Datum eines erfolgreich gesendeten Tagesberichts bleibt im NVS gespeichert und verhindert eine Doppelmeldung nach Neustart. Scheitert die HTTPS-Übertragung, bestimmt der Wiederholungsabstand den nächsten Versuch. Der Testknopf prüft neue Eingaben ohne vorheriges Speichern. Der offizielle Pushover-Endpunkt wird per HTTPS mit Zertifikatsprüfung angesprochen.
 
-Bei vollständigem Strom- oder Internetausfall kann der ESP32 naturgemäß keine Sofortmeldung übertragen. Sobald Gerät, WLAN, Internet und NTP-Zeit wieder verfügbar sind, wird der Start/Neustart gemeldet. Die Funktion ist eine Komfortbenachrichtigung und keine zertifizierte Alarmanlage.
+Bei vollständigem Strom- oder Internetausfall kann der ESP32 naturgemäß keine Sofortmeldung übertragen. Auch bei nahtlosem Inselbetrieb müssen ESP32, Router und Internetzugang weiter versorgt werden; die Netzwerkkomponenten müssen dafür am Ersatzstrom hängen. Sobald Gerät, WLAN, Internet und NTP-Zeit wieder verfügbar sind, wird der Start/Neustart gemeldet. Die Funktion ist eine Komfortbenachrichtigung und keine zertifizierte Alarmanlage.
 
 ## 7. Angezeigte Modbus-Werte
 
@@ -250,6 +250,7 @@ Die Weboberfläche verwendet die nullbasierten Modbus-Adressen aus dem Sketch:
 | Wechselrichter | 13004 / 13005 | PV-Einspeiseenergie heute / gesamt |
 | Wechselrichter | 13007 | aktuelle Haus-/Lastleistung; Grundlage des Lernprofils |
 | Wechselrichter | 13009 | Leistung am Netzanschlusspunkt; positive Werte werden als Einspeisung verwendet |
+| Wechselrichter | 13029 | Netzstatus aus Herstellerregister 13030: `0x55` Netzbetrieb, `0xAA` Inselbetrieb/Netzausfall; optional |
 | Wechselrichter (Holding) | 13073 | aktuelles Exportlimit in Watt, im Webinterface auf die konfigurierte PV-Leistung in Prozent umgerechnet |
 | Wechselrichter (Holding) | 13086 | Einspeisebegrenzung EIN (`0xAA`) oder AUS (`0x55`) |
 | Batterie über ID 1 | 13011 / 13012 | aus PV geladene Batterieenergie heute / gesamt |

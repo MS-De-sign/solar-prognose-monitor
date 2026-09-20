@@ -1,6 +1,6 @@
 # Vollständige Bedienungsanleitung
 
-Stand: Firmware **1.1.0**
+Stand: Firmware **1.1.1**
 
 Diese Anleitung beschreibt jede Seite und jedes sichtbare Bedien- oder Anzeigefeld des Solar Prognose Monitors. Die mathematischen Hintergründe stehen bewusst gesammelt im letzten Kapitel. Die erste Geräteintegration unterstützt Sungrow-Wechselrichter und -Batteriespeicher.
 
@@ -53,6 +53,7 @@ Das Suchfeld filtert die Tabelle nach Adresse, englischem Namen, deutscher Besch
 | 13005 | Total export energy from PV | Insgesamt aus PV eingespeiste Energie in kWh. |
 | 13007 | Load power | Momentaner Hausverbrauch in W; zugleich Eingangswert für das lernende Lastprofil. |
 | 13009 | Export power | Leistung am Netzanschlusspunkt in W; positive Werte werden als Einspeisung, negative als Netzbezug behandelt. |
+| 13029 | Grid state | Netzstatus aus Herstellerregister 13030: `0x55` Netzbetrieb, `0xAA` Inselbetrieb/Netzausfall. Optional, da nicht jeder Firmwarestand das Register bereitstellt. |
 | 13073 | Export Power Limit | Aktuell gelesene maximale Einspeiseleistung. Im Text wird sie anhand der konfigurierten PV-Leistung zusätzlich in Prozent umgerechnet. |
 | 13086 | Export Power Limitation | Zeigt, ob die Wechselrichterbegrenzung eingeschaltet (`0xAA`) oder ausgeschaltet (`0x55`) ist. |
 
@@ -179,7 +180,7 @@ Der Verlauf schreibt alle fünf Minuten einen kompakten Messpunkt in eine Tagesd
 | Prognose-Sicherheitsfaktor | Energiereserve für Prognosefehler und ungeplante Verbraucher. Bei 80 % erreicht der Fahrplan sein Ziel bereits nach rund 80 % der erwarteten nutzbaren Energie; die übrigen 20 % bleiben als Reserve. Kleiner bedeutet vorsichtiger und frühere Freigabe. |
 | PV-Systemwirkungsgrad | Pauschaler Anlagenfaktor für Temperatur, Kabel, Wechselrichter, Verschmutzung, Mismatch und kleinere Verschattung. Nicht mit dem Modulwirkungsgrad verwechseln. Standard: 95 %. |
 | Batterie-Ladewirkungsgrad | Anteil des PV-Überschusses, der als im Akku angekommen gerechnet wird. Standard: 95 %. |
-| SOC-Schrittweite | Raster der Max-SOC-Freigaben, ausgehend von 50 %. Bei 3 % entstehen 50, 53, 56 … 100 %. Empfohlen sind mindestens 3 %. Kleinere Werte erhöhen die Zahl der persistenten Wechselrichter-Schreibzugriffe deutlich. |
+| SOC-Schrittweite | Raster der Max-SOC-Freigaben, ausgehend von 50 %. Standard sind 10 %, um die Zahl der persistenten Wechselrichter-Schreibzugriffe zu reduzieren. Bei 3 % entstehen beispielsweise 50, 53, 56 … 100 %. Werte unter 3 % erhöhen die Schreibzahl besonders stark. |
 | Mindestabstand Schreibzugriffe | Mindestzeit zwischen normalen prognosebedingten Änderungen. |
 | Gewünschte Schreibobergrenze pro Tag | Tagesgrenze normaler Regelwrites. Reicht sie nicht aus, um den Bereich von 50 % bis Max-SOC in der gewählten Schrittweite abzudecken, wird sie automatisch auf die notwendige Zahl angehoben. Bypass-, Sicherheits- und abschließende Tagesfreigaben werden separat gezählt und bleiben möglich. Standard: 20. |
 | Open-Meteo-Intervall | Zeit zwischen automatischen Wetterabrufen. |
@@ -242,18 +243,28 @@ Nur aktivierte Stufen werden in Nummernreihenfolge addiert. Sind nur Stufe 1 mit
 | Application/API Token | 30-stelliger Schlüssel einer selbst angelegten Pushover-Anwendung. Ein leeres Feld behält den gespeicherten Wert. Er wird nach dem Speichern nicht mehr angezeigt. |
 | User-/Group-Key | 30-stelliger Empfängerschlüssel des eigenen Pushover-Kontos oder einer Gruppe. Ein leeres Feld behält den gespeicherten Wert. |
 | Gerät | Optionaler Pushover-Gerätename. Leer sendet an alle Geräte des Empfängers. |
-| Ausfall melden nach | Ein Wechselrichter-Modbusfehler muss zwischen 10 und 3.600 Sekunden ununterbrochen bestehen, bevor einmalig eine Ausfallmeldung eingeplant wird. Kurze Kommunikationsstörungen lösen dadurch keine Meldung aus. |
+| Nachrichten auswählen | Ausklappbereich mit einzelnen Schaltern für Start, Modbus, Netzstatus sowie beide Werte des Tagesberichts. |
+| Start oder Neustart | Meldet den erfolgreichen Start, sobald WLAN, Internet und gültige Uhrzeit verfügbar sind. |
+| Modbus-Ausfall und Wiederherstellung | Meldet eine anhaltend fehlende Wechselrichterantwort und die erste erfolgreiche Abfrage danach. |
+| Stromnetzausfall und Netzwiederkehr | Wertet `Grid state` 13030 aus: `0xAA` gilt als Inselbetrieb/Netzausfall, `0x55` als Netzbetrieb. |
+| PV-Strom des Tages | Nimmt den PV-Tagesertrag 13001 in den einmaligen Sonnenuntergangsbericht auf. |
+| Ladestufe des Speichers | Nimmt den absoluten Batteriestand 10743 bei Sonnenuntergang in den Tagesbericht auf. |
+| Ausfall melden nach | Ein Modbusfehler oder gemeldeter Netzausfall muss zwischen 10 und 3.600 Sekunden ununterbrochen bestehen, bevor einmalig eine Ausfallmeldung eingeplant wird. Kurze Störungen lösen dadurch keine Meldung aus. |
 | Wiederholungsversuch nach Sendefehler | Abstand von 1 bis 1.440 Minuten, bevor eine nicht zugestellte Nachricht erneut versucht wird. Erfolgreich gemeldete Zustandswechsel werden nicht laufend wiederholt. |
 | Zugangsdaten löschen | Deaktiviert Pushover und entfernt Token, User-Key sowie Gerätename dauerhaft. |
 | Testnachricht senden | Verwendet neu eingegebene Werte sofort, ohne sie zu speichern. Leere Token-/User-Felder greifen auf bereits gespeicherte Werte zurück. |
 
-Automatisch gemeldet werden:
+Je nach Auswahl werden gemeldet:
 
 - Start oder Neustart des ESP32, sobald Heim-WLAN, Internet und eine per NTP gültige Uhrzeit verfügbar sind,
 - ein länger als die eingestellte Verzögerung bestehender Ausfall der Wechselrichter-Modbusabfrage,
 - die erste erfolgreiche Modbusabfrage nach einem bereits gemeldeten Ausfall.
+- Inselbetrieb/Netzausfall und die Rückkehr in den Netzbetrieb über Sungrow `Grid state`,
+- einmal nach dem von Open-Meteo gelieferten Sonnenuntergang ein gemeinsamer Tagesbericht mit den ausgewählten Werten.
 
-Die Verbindung zum offiziellen Endpunkt `https://api.pushover.net/1/messages.json` wird per HTTPS mit Zertifikatsprüfung aufgebaut. Die Schlüssel werden lokal im ESP32 gespeichert, aber Pushover ist ein externer Dienst. Für jede Installation sollte eine eigene Pushover-Anwendung verwendet werden. Ist nur die direkte Modbusverbindung gestört, kann die Ausfallmeldung gesendet werden. Sind ESP32, Router oder Internetzugang selbst stromlos, ist keine sofortige Nachricht möglich; nach der Wiederkehr meldet der ESP32 seinen Neustart. Pushover ersetzt keine zertifizierte Alarm- oder Netzüberwachung.
+Das Datum eines erfolgreich übertragenen Tagesberichts wird im dauerhaften Einstellungsspeicher abgelegt. Dadurch führt ein ESP32-Neustart am selben Abend nicht zu einem zweiten Bericht. Fehlt ein ausgewählter Messwert zum Sendezeitpunkt, nennt der Bericht ihn als „nicht verfügbar“. Unterstützt der Wechselrichter `Grid state` nicht, wird nur dieser optionale Block übersprungen; die übrige Modbusabfrage bleibt funktionsfähig.
+
+Die Verbindung zum offiziellen Endpunkt `https://api.pushover.net/1/messages.json` wird per HTTPS mit Zertifikatsprüfung aufgebaut. Die Schlüssel werden lokal im ESP32 gespeichert, aber Pushover ist ein externer Dienst. Für jede Installation sollte eine eigene Pushover-Anwendung verwendet werden. Ist nur die direkte Modbusverbindung gestört, kann die Ausfallmeldung gesendet werden. Für eine Nachricht während des nahtlosen Inselbetriebs müssen ESP32, Router und Internetzugang weiterhin versorgt werden; insbesondere Router und vorgeschaltete Netztechnik müssen dafür am Ersatzstrom hängen. Sind diese Geräte oder der Internetzugang ausgefallen, ist keine sofortige Nachricht möglich. Nach der Wiederkehr meldet der ESP32 seinen Neustart. Pushover ersetzt keine zertifizierte Alarm- oder Netzüberwachung.
 
 ### Informationsblock unten
 

@@ -2,6 +2,15 @@
 
 ## Unveröffentlicht
 
+## 1.1.1 – 2026-09-20
+
+- macht Start-, Modbus- und Netzstatusmeldungen sowie die beiden Inhalte des täglichen Pushover-Berichts einzeln auswählbar
+- liest Sungrow `Grid state` über das optionale Herstellerregister 13030 (nullbasiert Adresse 13029) und meldet `0xAA` als Inselbetrieb/Netzausfall sowie `0x55` als Netzwiederkehr
+- versendet nach Sonnenuntergang auf Wunsch einen gemeinsamen Tagesbericht mit PV-Tagesertrag und absolutem Batteriestand
+- speichert das Datum eines erfolgreich versendeten Tagesberichts dauerhaft und verhindert dadurch doppelte Berichte nach einem Neustart
+- setzt die Standard-SOC-Schrittweite für neue Konfigurationen auf 10 %, um die Zahl der Wechselrichter-Schreibvorgänge zu reduzieren; gespeicherte Werte bleiben unverändert
+- dokumentiert, dass eine Netzausfallmeldung im Inselbetrieb nur bei weiter versorgtem ESP32, Router und Internetzugang sofort versendet werden kann
+
 ## 1.1.0 – 2026-09-20
 
 - ergänzt einen deutlich sichtbaren Hinweis, vor Wartungs-, Service- und Inbetriebnahmearbeiten auf Bypass umzuschalten; Batterieerweiterungen und deren automatische Lade-/Entladeprozedur werden als besonders wichtiges Beispiel genannt

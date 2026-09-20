@@ -48,7 +48,7 @@
   - Lokales 15-Minuten-Lastprofil je Wochentag mit stuendlicher NVS-Speicherung.
   - Dauerhafter 31-Tage-Anlagenverlauf in LittleFS mit Messpunkten im 5-Minuten-Takt.
   - Drei- oder Vier-Kontakt-Rundsteuerung mit verifizierten Exportlimit-Schreibzugriffen.
-  - Optionale Pushover-Meldungen fuer Start, Modbus-Ausfall und Wiederherstellung.
+  - Auswaehlbare Pushover-Meldungen fuer Start, Modbus-/Netzausfall und Tagesbericht.
   - Fuer einen RS485-Transceiver sind RX, TX und ein gemeinsamer DE-/RE-Pin konfigurierbar.
   - Es ist keine zusaetzliche Modbus-Bibliothek erforderlich.
   - Der ESP32 startet immer einen eigenen Access Point.
@@ -60,7 +60,7 @@
 */
 
 namespace ConfigDefaults {
-constexpr char FIRMWARE_VERSION[] = "1.1.0";
+constexpr char FIRMWARE_VERSION[] = "1.1.1";
 constexpr char MANUFACTURER[] = "MS-De-sign / Marcus Sonntag";
 constexpr char LICENSE_TEXT[] = "PolyForm Noncommercial License 1.0.0";
 constexpr char PROJECT_URL[] = "https://github.com/MS-De-sign/solar-prognose-monitor";
@@ -287,7 +287,7 @@ RegisterDef registers[] = {
   BREG16(13025, "Daily battery discharge energy", "Batterie-Entladeenergie heute", "kWh", ValueType::U16, 0.1f, 0.0f, 1),
   BREG32(13026, "Total battery discharge energy", "Batterie-Entladeenergie gesamt", "kWh", ValueType::U32_WORD_SWAPPED, 0.1f, 1.0f, 1),
   REG16(13028, "Self-consumption today", "Eigenverbrauchsanteil heute", "%", ValueType::U16, 0.1f, 0.0f, 1),
-  REG16(13029, "Grid state", "Netzstatus", "", ValueType::S16, 1.0f, 0.0f, 0),
+  REG16(13029, "Grid state", "Netzstatus", "", ValueType::U16, 1.0f, 0.0f, 0),
   REG16(13030, "Phase A current", "Strom Phase A", "A", ValueType::U16, 0.1f, 0.0f, 1),
   REG16(13031, "Phase B current", "Strom Phase B", "A", ValueType::U16, 0.1f, 0.0f, 1),
   REG16(13032, "Phase C current", "Strom Phase C", "A", ValueType::U16, 0.1f, 0.0f, 1),
@@ -385,6 +385,7 @@ RegisterDef registers[] = {
   BREG16(13022, "Battery level", "Relativer Batteriestand zum aktuellen Max-SOC-Wert", "%", ValueType::U16, 0.1f, 0.0f, 1),
   BREG16(13023, "Battery state of health", "Batterie-SOH über Wechselrichter", "%", ValueType::U16, 0.1f, 0.0f, 1),
   BREG16(13024, "Battery temperature", "Batterietemperatur", "°C", ValueType::S16, 0.1f, 0.0f, 1),
+  REG16(13029, "Grid state", "Netzstatus", "", ValueType::U16, 1.0f, 0.0f, 0),
   BREG16(13038, "Battery capacity", "Batteriekapazität", "kWh", ValueType::U16, 0.01f, 0.0f, 1),
   BAT200_16(10743, "Battery1 SOC", "Absoluter Batteriestand", "%", ValueType::U16, 0.1f, 0.0f, 1),
   BAT200_16(10744, "Battery1 SOH", "Batterie SOH aus Batteriedaten", "%", ValueType::U16, 1.0f, 0.0f, 0)
@@ -398,7 +399,7 @@ RegisterDef registers[] = {
 #undef BAT200_32
 
 constexpr size_t REGISTER_COUNT = sizeof(registers) / sizeof(registers[0]);
-static_assert(REGISTER_COUNT == 19, "Die kompakte Registerliste muss genau 19 Eintraege enthalten.");
+static_assert(REGISTER_COUNT == 20, "Die kompakte Registerliste muss genau 20 Eintraege enthalten.");
 
 struct ReadBlock {
   SourceGroup source;
@@ -415,6 +416,9 @@ const ReadBlock readBlocks[] = {
   {SourceGroup::INVERTER, 5748, 2, true},
   {SourceGroup::INVERTER, 13001, 13, false},
   {SourceGroup::INVERTER, 13021, 4, false},
+  // Nicht alle Firmwarestaende stellen "Grid state" bereit. Eine Modbus-
+  // Ausnahme 0x02 deaktiviert nur diesen Block, nicht den gesamten Zyklus.
+  {SourceGroup::INVERTER, 13029, 1, true},
   {SourceGroup::INVERTER, 13038, 1, false},
   {SourceGroup::BATTERY, 10743, 2, false}
 };
@@ -476,6 +480,11 @@ struct AppConfig {
   String pushoverDevice;
   uint16_t pushoverFailureDelaySeconds;
   uint16_t pushoverRetryMinutes;
+  bool pushoverNotifyStartup;
+  bool pushoverNotifyModbus;
+  bool pushoverNotifyGrid;
+  bool pushoverDailyPv;
+  bool pushoverDailyBattery;
 } config;
 
 enum class ModbusMode : uint8_t {
@@ -682,7 +691,10 @@ enum class PushoverEvent : uint8_t {
   NONE,
   STARTED,
   MODBUS_OUTAGE,
-  MODBUS_RESTORED
+  MODBUS_RESTORED,
+  GRID_OUTAGE,
+  GRID_RESTORED,
+  DAILY_REPORT
 };
 
 PushoverEvent pendingPushoverEvent = PushoverEvent::NONE;
@@ -695,6 +707,12 @@ bool pushoverBootPending = true;
 bool pushoverModbusOutageActive = false;
 bool pushoverModbusOutageDelivered = false;
 bool pushoverRecoveryNeeded = false;
+uint32_t pushoverGridFailureSince = 0;
+bool pushoverGridOutageActive = false;
+bool pushoverGridOutageDelivered = false;
+bool pushoverGridRecoveryNeeded = false;
+uint32_t pushoverLastDailyReportDate = 0;
+uint32_t pendingPushoverDailyReportDate = 0;
 
 bool timeReached(uint32_t target);
 
@@ -830,15 +848,30 @@ bool queuePushoverEvent(PushoverEvent event, const String &title, const String &
   return true;
 }
 
+void cancelPendingPushoverEvent(PushoverEvent event) {
+  if (pendingPushoverEvent != event) return;
+  pendingPushoverEvent = PushoverEvent::NONE;
+  pendingPushoverTitle = "";
+  pendingPushoverMessage = "";
+  nextPushoverAttemptAt = 0;
+}
+
 void observePushoverModbusState(bool healthy) {
+  if (!config.pushoverNotifyModbus) {
+    cancelPendingPushoverEvent(PushoverEvent::MODBUS_OUTAGE);
+    cancelPendingPushoverEvent(PushoverEvent::MODBUS_RESTORED);
+    pushoverModbusFailureSince = 0;
+    pushoverModbusOutageActive = false;
+    pushoverModbusOutageDelivered = false;
+    pushoverRecoveryNeeded = false;
+    return;
+  }
   const uint32_t now = millis();
   if (healthy) {
     pushoverModbusFailureSince = 0;
     if (!pushoverModbusOutageActive) return;
     if (pendingPushoverEvent == PushoverEvent::MODBUS_OUTAGE && !pushoverModbusOutageDelivered) {
-      pendingPushoverEvent = PushoverEvent::NONE;
-      pendingPushoverTitle = "";
-      pendingPushoverMessage = "";
+      cancelPendingPushoverEvent(PushoverEvent::MODBUS_OUTAGE);
     }
     if (pushoverModbusOutageDelivered) pushoverRecoveryNeeded = true;
     pushoverModbusOutageActive = false;
@@ -857,16 +890,133 @@ void observePushoverModbusState(bool healthy) {
   }
 }
 
+void observePushoverGridState() {
+  if (!config.pushoverNotifyGrid) {
+    cancelPendingPushoverEvent(PushoverEvent::GRID_OUTAGE);
+    cancelPendingPushoverEvent(PushoverEvent::GRID_RESTORED);
+    pushoverGridFailureSince = 0;
+    pushoverGridOutageActive = false;
+    pushoverGridOutageDelivered = false;
+    pushoverGridRecoveryNeeded = false;
+    return;
+  }
+
+  RegisterDef *gridState = nullptr;
+  for (size_t i = 0; i < REGISTER_COUNT; ++i) {
+    if (registers[i].source == SourceGroup::INVERTER && registers[i].address == 13029) {
+      gridState = &registers[i];
+      break;
+    }
+  }
+  const uint32_t maximumAgeMs = max<uint32_t>(30000UL,
+      static_cast<uint32_t>(config.pollSeconds) * 2000UL + 5000UL);
+  if (gridState == nullptr || !gridState->valid || gridState->updatedAt == 0
+      || millis() - gridState->updatedAt > maximumAgeMs) return;
+
+  const uint16_t raw = static_cast<uint16_t>(gridState->value);
+  if (raw != 0x0055 && raw != 0x00AA) return;
+  const uint32_t now = millis();
+  if (raw == 0x0055) {
+    pushoverGridFailureSince = 0;
+    if (!pushoverGridOutageActive) return;
+    if (pendingPushoverEvent == PushoverEvent::GRID_OUTAGE && !pushoverGridOutageDelivered) {
+      cancelPendingPushoverEvent(PushoverEvent::GRID_OUTAGE);
+    }
+    if (pushoverGridOutageDelivered) pushoverGridRecoveryNeeded = true;
+    pushoverGridOutageActive = false;
+    return;
+  }
+
+  if (pushoverGridFailureSince == 0) pushoverGridFailureSince = now;
+  const uint32_t delayMs = static_cast<uint32_t>(config.pushoverFailureDelaySeconds) * 1000UL;
+  if (now - pushoverGridFailureSince < delayMs) return;
+  pushoverGridOutageActive = true;
+  if (!pushoverGridOutageDelivered && pendingPushoverEvent == PushoverEvent::NONE) {
+    const String message = "Der Wechselrichter meldet seit mindestens "
+        + String(config.pushoverFailureDelaySeconds)
+        + " Sekunden Inselbetrieb/Netzausfall (Grid state 13030 = 0xAA).";
+    queuePushoverEvent(PushoverEvent::GRID_OUTAGE,
+                       "Solar Prognose Monitor: Stromnetz ausgefallen", message);
+  }
+}
+
+uint32_t pushoverLocalDateKey(time_t epoch) {
+  if (epoch <= 0) return 0;
+  const time_t shifted = epoch + forecast.utcOffsetSeconds;
+  tm parts = {};
+  if (gmtime_r(&shifted, &parts) == nullptr) return 0;
+  return static_cast<uint32_t>(parts.tm_year + 1900) * 10000UL
+       + static_cast<uint32_t>(parts.tm_mon + 1) * 100UL
+       + static_cast<uint32_t>(parts.tm_mday);
+}
+
+String pushoverDailyReportMessage() {
+  RegisterDef *dailyPv = nullptr;
+  RegisterDef *batterySoc = nullptr;
+  for (size_t i = 0; i < REGISTER_COUNT; ++i) {
+    if (registers[i].source == SourceGroup::INVERTER && registers[i].address == 13001) dailyPv = &registers[i];
+    if (registers[i].source == SourceGroup::BATTERY && registers[i].address == 10743) batterySoc = &registers[i];
+  }
+  const uint32_t maximumAgeMs = max<uint32_t>(120000UL,
+      static_cast<uint32_t>(config.pollSeconds) * 2000UL + 5000UL);
+  String message;
+  if (config.pushoverDailyPv) {
+    message += "PV-Erzeugung heute: ";
+    if (dailyPv != nullptr && dailyPv->valid && dailyPv->updatedAt != 0
+        && millis() - dailyPv->updatedAt <= maximumAgeMs) {
+      message += String(dailyPv->value, 1) + " kWh";
+    } else {
+      message += "nicht verfügbar";
+    }
+  }
+  if (config.pushoverDailyBattery) {
+    if (!message.isEmpty()) message += "\n";
+    message += "Absoluter Batteriestand bei Sonnenuntergang: ";
+    if (batterySoc != nullptr && batterySoc->valid && batterySoc->updatedAt != 0
+        && millis() - batterySoc->updatedAt <= maximumAgeMs) {
+      message += String(batterySoc->value, 1) + " %";
+    } else {
+      message += "nicht verfügbar";
+    }
+  }
+  return message;
+}
+
+void queuePushoverDailyReportIfDue() {
+  if ((!config.pushoverDailyPv && !config.pushoverDailyBattery)
+      || forecast.sunset <= 0 || pendingPushoverEvent != PushoverEvent::NONE) return;
+  const time_t now = time(nullptr);
+  if (now < forecast.sunset) return;
+  const uint32_t today = pushoverLocalDateKey(now);
+  const uint32_t sunsetDate = pushoverLocalDateKey(forecast.sunset);
+  if (today == 0 || today != sunsetDate || today == pushoverLastDailyReportDate) return;
+  const String message = pushoverDailyReportMessage();
+  if (message.isEmpty()) return;
+  if (queuePushoverEvent(PushoverEvent::DAILY_REPORT,
+                         "Solar Prognose Monitor: Tagesbericht", message)) {
+    pendingPushoverDailyReportDate = today;
+  }
+}
+
 void servicePushover() {
   if (!pushoverConfigured() || WiFi.status() != WL_CONNECTED || !systemTimeIsValid()) return;
 
-  if (pendingPushoverEvent == PushoverEvent::NONE && pushoverRecoveryNeeded) {
+  if (pendingPushoverEvent == PushoverEvent::NONE && config.pushoverNotifyGrid
+      && pushoverGridRecoveryNeeded) {
+    queuePushoverEvent(PushoverEvent::GRID_RESTORED,
+                       "Solar Prognose Monitor: Stromnetz wieder verfügbar",
+                       "Der Wechselrichter meldet wieder Netzbetrieb (Grid state 13030 = 0x55).");
+  }
+  if (pendingPushoverEvent == PushoverEvent::NONE && config.pushoverNotifyModbus
+      && pushoverRecoveryNeeded) {
     queuePushoverEvent(PushoverEvent::MODBUS_RESTORED,
                        "Solar Prognose Monitor: Modbus wieder erreichbar",
                        "Die Modbus-Verbindung zum Wechselrichter arbeitet wieder. Transport: "
                            + lastModbusTransport);
   }
-  if (pendingPushoverEvent == PushoverEvent::NONE && pushoverBootPending) {
+  queuePushoverDailyReportIfDue();
+  if (pendingPushoverEvent == PushoverEvent::NONE && config.pushoverNotifyStartup
+      && pushoverBootPending) {
     queuePushoverEvent(PushoverEvent::STARTED, "Solar Prognose Monitor gestartet",
                        "ESP32 gestartet oder neu gestartet. Firmware "
                            + String(ConfigDefaults::FIRMWARE_VERSION) + ", IP "
@@ -887,6 +1037,18 @@ void servicePushover() {
     if (deliveredEvent == PushoverEvent::MODBUS_RESTORED) {
       pushoverRecoveryNeeded = false;
       pushoverModbusOutageDelivered = false;
+    }
+    if (deliveredEvent == PushoverEvent::GRID_OUTAGE) pushoverGridOutageDelivered = true;
+    if (deliveredEvent == PushoverEvent::GRID_RESTORED) {
+      pushoverGridRecoveryNeeded = false;
+      pushoverGridOutageDelivered = false;
+    }
+    if (deliveredEvent == PushoverEvent::DAILY_REPORT) {
+      pushoverLastDailyReportDate = pendingPushoverDailyReportDate;
+      pendingPushoverDailyReportDate = 0;
+      preferences.begin("sungrow", false);
+      preferences.putUInt("polastday", pushoverLastDailyReportDate);
+      preferences.end();
     }
     lastPushoverStatus = status;
     debugPrintln("Pushover: " + status + ".");
@@ -1067,7 +1229,7 @@ void setDefaultForecastConfig() {
   config.forecastSafetyPercent = 80;
   config.pvSystemEfficiencyPercent = 95;
   config.batteryChargeEfficiencyPercent = 95;
-  config.socStepPercent = 3;
+  config.socStepPercent = 10;
   config.minimumWriteMinutes = 20;
   config.maximumWritesPerDay = 20;
   config.forecastFetchHours = 3;
@@ -1225,6 +1387,14 @@ void loadConfig() {
       "podelay", ConfigDefaults::PUSHOVER_FAILURE_DELAY_SECONDS);
   config.pushoverRetryMinutes = preferences.getUShort(
       "poretry", ConfigDefaults::PUSHOVER_RETRY_MINUTES);
+  config.pushoverNotifyStartup = preferences.getBool("postart", true);
+  config.pushoverNotifyModbus = preferences.getBool("pomodbus", true);
+  // Neue Meldungsarten sind Opt-in. Bestehende Installationen erhalten nach
+  // einem Update keine zusaetzlichen Nachrichten, bevor sie diese auswaehlen.
+  config.pushoverNotifyGrid = preferences.getBool("pogrid", false);
+  config.pushoverDailyPv = preferences.getBool("podailypv", false);
+  config.pushoverDailyBattery = preferences.getBool("podailybat", false);
+  pushoverLastDailyReportDate = preferences.getUInt("polastday", 0);
   config.forecastEnabled = preferences.getBool("fcen", config.forecastEnabled);
   config.forecastBypass = preferences.getBool("fcbypass", config.forecastBypass);
   config.latitude = preferences.getFloat("lat", config.latitude);
@@ -1354,6 +1524,12 @@ void saveConfig() {
   preferences.putString("podevice", config.pushoverDevice);
   preferences.putUShort("podelay", config.pushoverFailureDelaySeconds);
   preferences.putUShort("poretry", config.pushoverRetryMinutes);
+  preferences.putBool("postart", config.pushoverNotifyStartup);
+  preferences.putBool("pomodbus", config.pushoverNotifyModbus);
+  preferences.putBool("pogrid", config.pushoverNotifyGrid);
+  preferences.putBool("podailypv", config.pushoverDailyPv);
+  preferences.putBool("podailybat", config.pushoverDailyBattery);
+  preferences.putUInt("polastday", pushoverLastDailyReportDate);
   preferences.putBool("fcen", config.forecastEnabled);
   preferences.putBool("fcbypass", config.forecastBypass);
   preferences.putFloat("lat", config.latitude);
@@ -2136,6 +2312,7 @@ void finishPollingCycle() {
   pollingCycleActive = false;
   nextPollAt = now + static_cast<uint32_t>(config.pollSeconds) * 1000UL;
   observePushoverModbusState(inverterCycleOk);
+  observePushoverGridState();
   debugPrintf("Modbus-Zyklus beendet: Wechselrichter %s, Batterie %s; letzter Transport: %s.\n",
               inverterCycleOk ? "OK" : "Fehler", batteryCycleOk ? "OK" : "Fehler", lastModbusTransport.c_str());
 }
@@ -2226,6 +2403,14 @@ bool registerIsUnsupported(const RegisterDef &reg) {
 
 String formattedValue(const RegisterDef &reg) {
   if (!reg.valid) return String();
+  if (reg.source == SourceGroup::INVERTER && reg.address == 13029) {
+    const uint16_t raw = static_cast<uint16_t>(reg.value);
+    if (raw == 0x0055) return "Netz vorhanden (On-grid)";
+    if (raw == 0x00AA) return "Netzausfall / Inselbetrieb (Off-grid)";
+    char unknown[24];
+    snprintf(unknown, sizeof(unknown), "Unbekannt (0x%04X)", raw);
+    return String(unknown);
+  }
   return String(reg.value, static_cast<unsigned int>(reg.decimals));
 }
 
@@ -3681,7 +3866,7 @@ void handleSettings() {
   part += String(config.batteryChargeEfficiencyPercent);
   part += F("'></label><label>SOC-Schrittweite (%)<input name='socstep' type='number' min='1' max='20' value='");
   part += String(config.socStepPercent);
-  part += F("'><p class='hint'>Empfohlener Mindestwert: 3 %. Verpasste Fahrplanstufen werden nicht abgewartet; es gilt immer der zur aktuellen Uhrzeit vorgesehene Wert.</p></label><div class='caution full'><b>Achtung bei weniger als 3 %:</b> Kleinere Schritte erzeugen deutlich mehr Schreibzugriffe. Da der Max-SOC dauerhaft im Wechselrichter erhalten bleibt, kann eine zusätzliche Belastung seines nichtflüchtigen Speichers nicht ausgeschlossen werden. Nutzung kleinerer Werte auf eigene Verantwortung.</div><label>Mindestabstand Schreibzugriffe (min)<input name='writemin' type='number' min='5' max='240' value='");
+  part += F("'><p class='hint'>Standard: 10 %. Empfohlener Mindestwert: 3 %. Verpasste Fahrplanstufen werden nicht abgewartet; es gilt immer der zur aktuellen Uhrzeit vorgesehene Wert.</p></label><div class='caution full'><b>Achtung bei weniger als 3 %:</b> Kleinere Schritte erzeugen deutlich mehr Schreibzugriffe. Da der Max-SOC dauerhaft im Wechselrichter erhalten bleibt, kann eine zusätzliche Belastung seines nichtflüchtigen Speichers nicht ausgeschlossen werden. Nutzung kleinerer Werte auf eigene Verantwortung.</div><label>Mindestabstand Schreibzugriffe (min)<input name='writemin' type='number' min='5' max='240' value='");
   part += String(config.minimumWriteMinutes);
   part += F("'></label><label>Gewünschte Schreibobergrenze pro Tag<input name='writemax' type='number' min='1' max='48' value='");
   part += String(config.maximumWritesPerDay);
@@ -3821,7 +4006,7 @@ void handleSettings() {
 
   part = F("<p class='hint'><b>Wichtig:</b> GPIOs dürfen Heizpatrone, Klimaanlage oder andere Netzlasten niemals direkt schalten. Verwende passend dimensionierte Relais, SSRs oder Schütze und lasse die Netzseite fachgerecht installieren.</p></section><section class='card'><h2>Pushover-Benachrichtigungen</h2><div class='grid'><label class='check full'><input type='checkbox' name='poEnabled' value='1'");
   if (config.pushoverEnabled) part += F(" checked");
-  part += F("> Meldungen an Pushover aktivieren</label><div class='full'><p class='hint'>Benachrichtigt beim Start/Neustart, nach einem anhaltenden Modbus-Ausfall und nach Wiederherstellung der Verbindung. Für jedes Gerät bzw. jede Installation sollte in Pushover eine eigene Anwendung angelegt werden.</p></div><label>Application/API Token<input id='poToken' name='poToken' type='password' maxlength='30' pattern='[A-Za-z0-9]{30}' autocomplete='new-password' data-stored='");
+  part += F("> Meldungen an Pushover aktivieren</label><div class='full'><p class='hint'>Die gewünschten Ereignisse und Werte des Sonnenuntergangsberichts können unten einzeln ausgewählt werden. Für jedes Gerät bzw. jede Installation sollte in Pushover eine eigene Anwendung angelegt werden.</p></div><label>Application/API Token<input id='poToken' name='poToken' type='password' maxlength='30' pattern='[A-Za-z0-9]{30}' autocomplete='new-password' data-stored='");
   part += isPushoverCredential(config.pushoverAppToken) ? F("1") : F("0");
   part += F("' placeholder='");
   part += isPushoverCredential(config.pushoverAppToken)
@@ -3839,7 +4024,17 @@ void handleSettings() {
   part += String(config.pushoverFailureDelaySeconds);
   part += F("'></label><label>Wiederholungsversuch nach Sendefehler (min)<input name='poRetry' type='number' min='1' max='1440' value='");
   part += String(config.pushoverRetryMinutes);
-  part += F("'></label><div class='full'><label class='check'><input type='checkbox' name='poClear' value='1'> Gespeicherte Pushover-Zugangsdaten löschen</label></div><div class='full'><button id='poTest' class='button secondary' type='button'>Testnachricht senden</button><span id='poResult' class='result'>");
+  part += F("'></label><div class='full'><details class='stage-card' open><summary>Nachrichten auswählen</summary><div class='stage-body'><div class='grid'><label class='check full'><input type='checkbox' name='poStartup' value='1'");
+  if (config.pushoverNotifyStartup) part += F(" checked");
+  part += F("> Start oder Neustart des ESP32</label><label class='check full'><input type='checkbox' name='poModbus' value='1'");
+  if (config.pushoverNotifyModbus) part += F(" checked");
+  part += F("> Modbus-Ausfall und Wiederherstellung</label><label class='check full'><input type='checkbox' name='poGrid' value='1'");
+  if (config.pushoverNotifyGrid) part += F(" checked");
+  part += F("> Stromnetzausfall/Inselbetrieb und Netzwiederkehr</label><p class='hint full'><b>Tagesbericht bei Sonnenuntergang</b> – ausgewählte Werte werden gemeinsam genau einmal pro Tag gesendet.</p><label class='check full'><input type='checkbox' name='poDailyPv' value='1'");
+  if (config.pushoverDailyPv) part += F(" checked");
+  part += F("> Gesamter produzierter PV-Strom des Tages (PV-Tagesertrag, Register 13001)</label><label class='check full'><input type='checkbox' name='poDailyBat' value='1'");
+  if (config.pushoverDailyBattery) part += F(" checked");
+  part += F("> Ladestufe des Speichers (absoluter Batteriestand, Register 10743)</label></div></div></details></div><div class='full'><p class='hint'>Die Ausfallverzögerung gilt sowohl für den Modbus- als auch für den gemeldeten Netzausfall. Der Netzstatus wird über Sungrow Grid state 13030 ausgewertet; unterstützt ein Gerät dieses Register nicht, bleibt nur diese Meldungsart ohne Funktion.</p><label class='check'><input type='checkbox' name='poClear' value='1'> Gespeicherte Pushover-Zugangsdaten löschen</label></div><div class='full'><button id='poTest' class='button secondary' type='button'>Testnachricht senden</button><span id='poResult' class='result'>");
   part += htmlEscape(lastPushoverStatus);
   part += F("</span><p class='hint'>Die Testnachricht verwendet neue Eingaben direkt, ohne sie zu speichern; leere Felder verwenden bereits gespeicherte Zugangsdaten. Die Verbindung zu Pushover wird per HTTPS mit Zertifikatsprüfung aufgebaut. Ist ESP32, Router oder Internet stromlos, kann keine Sofortmeldung versendet werden; nach dem Neustart folgt die Startmeldung.</p></div></div></section><button class='button' type='submit'>Speichern und neu starten</button></form><section class='card info'><h2>Verbindung</h2><b>Access Point:</b> ");
   part += htmlEscape(accessPointSsid);
@@ -3916,6 +4111,11 @@ void handleSave() {
       "poDelay", ConfigDefaults::PUSHOVER_FAILURE_DELAY_SECONDS, 10, 3600));
   config.pushoverRetryMinutes = static_cast<uint16_t>(boundedNumberArgument(
       "poRetry", ConfigDefaults::PUSHOVER_RETRY_MINUTES, 1, 1440));
+  config.pushoverNotifyStartup = server.hasArg("poStartup");
+  config.pushoverNotifyModbus = server.hasArg("poModbus");
+  config.pushoverNotifyGrid = server.hasArg("poGrid");
+  config.pushoverDailyPv = server.hasArg("poDailyPv");
+  config.pushoverDailyBattery = server.hasArg("poDailyBat");
 
   config.modbusHost = server.arg("host");
   config.modbusHost.trim();
@@ -3943,7 +4143,7 @@ void handleSave() {
   config.forecastSafetyPercent = static_cast<uint8_t>(boundedNumberArgument("fcsafe", 80, 40, 100));
   config.pvSystemEfficiencyPercent = static_cast<uint8_t>(boundedNumberArgument("pveff", 95, 40, 100));
   config.batteryChargeEfficiencyPercent = static_cast<uint8_t>(boundedNumberArgument("bateff", 95, 50, 100));
-  config.socStepPercent = static_cast<uint8_t>(boundedNumberArgument("socstep", 3, 1, 20));
+  config.socStepPercent = static_cast<uint8_t>(boundedNumberArgument("socstep", 10, 1, 20));
   config.minimumWriteMinutes = static_cast<uint16_t>(boundedNumberArgument("writemin", 20, 5, 240));
   config.maximumWritesPerDay = static_cast<uint8_t>(boundedNumberArgument("writemax", 20, 1, 48));
   config.forecastFetchHours = static_cast<uint8_t>(boundedNumberArgument("fetchhrs", 3, 1, 12));

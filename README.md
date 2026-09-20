@@ -16,7 +16,7 @@ Der Hausverbrauch wird für jeden Wochentag in 15-Minuten-Blöcken gelernt. Wied
 
 Die Steuerung gibt den zulässigen Ladezielwert schrittweise frei. Bei einer unerwarteten Wolkenphase wartet sie nicht auf eine verpasste Zwischenstufe, sondern wechselt auf den zur aktuellen Uhrzeit vorgesehenen Wert. Zusätzlich prüft sie, welcher Batteriestand mindestens freigegeben werden muss, damit das Tagesziel mit der noch erwarteten Energie erreichbar bleibt. Sicherheitsreserve, gewünschtes Ladeende und Schrittweite lassen sich einstellen. Da Wetter- und Verbrauchsprognosen nie vollkommen exakt sind, ersetzt das System keine Anlagenüberwachung und sollte bei der ersten Inbetriebnahme kontrolliert werden.
 
-Aktuelle Version: **1.1.0**
+Aktuelle Version: **1.1.1**
 
 **Hardwarestand:** Die aktuelle Firmware ist für ein klassisches **ESP32 DevKit mit ESP32-WROOM-Modul** ausgelegt. Weitere ESP32-Varianten wie der **ESP32-C3** werden derzeit getestet; Pinbelegung, Partitionierung und Programmcode werden dafür schrittweise angepasst. Bis eine Variante ausdrücklich als unterstützt gekennzeichnet ist, sollte dafür nicht ungeprüft die DevKit-Firmware verwendet werden.
 
@@ -34,7 +34,7 @@ Aktuelle Version: **1.1.0**
 - aktiver HIGH- oder LOW-Pegel für jeden Rundsteuer-Eingang separat auswählbar
 - Browser-Firmwareupdate mit verifizierter Sicherung von Lernprofil und Verlauf; bewusst bestätigbare Notfallfreigabe bei Speicherproblemen
 - About-Seite mit Firmware-Version, Hersteller, Lizenzstatus und Flashgröße; Web-Debug ist dort integriert
-- optionale Pushover-Meldungen bei ESP32-Start, längerem Modbus-Ausfall und wiederhergestellter Modbus-Verbindung
+- einzeln auswählbare Pushover-Meldungen bei ESP32-Start, Modbus-Ausfall, Netzausfall/Inselbetrieb und Wiederherstellung sowie ein täglicher Sonnenuntergangsbericht
 - kompatibel mit ESP32 Arduino Core 3.3.8
 - eigene Partitionstabellen für 4 MB und 8 MB: bestehende 20-KB-System-NVS, zusätzliche 64-KB-Profil-NVS, zwei große OTA-Slots und eine separate LittleFS-Verlaufspartition
 - optionale Smart-Meter-Zählerstände 5746 und 5748: nicht unterstützte Register beeinträchtigen die übrige Modbus-Abfrage nicht
@@ -60,11 +60,13 @@ Aus der aktiven Kontaktstufe und der installierten PV-Leistung ermittelt der ESP
 
 ## Pushover-Benachrichtigungen
 
-Unter **Einstellungen** können optional ein eigener Pushover-Application/API-Token und ein User-/Group-Key hinterlegt werden. Der ESP32 meldet dann einen Start oder Neustart, einen länger als die eingestellte Verzögerung bestehenden Modbus-Ausfall und die anschließende Wiederherstellung. Ein Testknopf prüft die Konfiguration vorab. Fehlgeschlagene Übertragungen werden mit einstellbarem Abstand erneut versucht; Statuswechsel erzeugen jeweils nur eine Meldung.
+Unter **Einstellungen** können optional ein eigener Pushover-Application/API-Token und ein User-/Group-Key hinterlegt werden. In einem Ausklappbereich sind Start/Neustart, Modbus-Ausfall mit Wiederherstellung, Netzausfall/Inselbetrieb mit Netzwiederkehr sowie die Inhalte des täglichen Sonnenuntergangsberichts einzeln auswählbar. Der Tagesbericht kann den PV-Tagesertrag aus Register 13001 und den absoluten Batteriestand aus Register 10743 enthalten. Er wird erst nach erfolgreicher Übergabe dauerhaft für das betreffende Datum als versendet markiert und deshalb nach einem Neustart nicht doppelt verschickt.
+
+Für den Netzstatus wird das Sungrow-Herstellerregister **13030 „Grid state“** verwendet; im nullbasierten Sketch ist dies Adresse **13029**. `0x55` bedeutet Netzbetrieb, `0xAA` Inselbetrieb beziehungsweise Netzausfall. Die Abfrage ist optional: Weist ein Wechselrichter das Register zurück, laufen alle übrigen Modbuswerte weiter und lediglich diese Meldungsart steht nicht zur Verfügung. Ein Testknopf prüft die Pushover-Konfiguration vorab. Fehlgeschlagene Übertragungen werden mit einstellbarem Abstand erneut versucht; Statuswechsel erzeugen jeweils nur eine Meldung.
 
 Die Zugangsdaten bleiben im Einstellungsspeicher des ESP32 und werden nach dem Speichern nicht mehr an den Browser zurückgegeben. Die Übertragung zu `api.pushover.net` erfolgt über HTTPS mit Zertifikatsprüfung. Pushover ist ein externer Dienst; es gelten dessen Konto-, Datenschutz- und Nutzungsvorgaben. Für jede Installation sollte eine eigene Pushover-Anwendung und damit ein eigener Application/API-Token verwendet werden.
 
-Eine sofortige Stromausfallmeldung ist technisch nur möglich, solange ESP32, Router und Internetzugang noch versorgt werden. Nach einem vollständigen Stromausfall meldet sich der ESP32 deshalb erst nach Rückkehr von Strom, WLAN, Internet und gültiger Systemzeit mit der Startmeldung. Die Funktion ersetzt keine zertifizierte Alarm- oder Netzüberwachung.
+**Voraussetzung für die Meldung im Inselbetrieb:** Eine sofortige Stromausfallmeldung ist technisch nur möglich, solange ESP32, Router und Internetzugang trotz ausgefallenem öffentlichen Netz weiter versorgt werden. Bei nahtlosem Inselbetrieb muss daher neben dem ESP32 insbesondere auch die Netzwerk- und Internetanbindung am Ersatzstrom hängen. Nach einem vollständigen Stromausfall meldet sich der ESP32 erst nach Rückkehr von Strom, WLAN, Internet und gültiger Systemzeit mit der Startmeldung. Die Funktion ersetzt keine zertifizierte Alarm- oder Netzüberwachung.
 
 ## Dateien
 
@@ -92,10 +94,10 @@ Der Sketch verwendet ausschließlich Bibliotheken aus dem ESP32-Core.
 Für einen reproduzierbaren Build beider Varianten im Projektordner ausführen:
 
 ```powershell
-.\scripts\build-release.ps1 -Version 1.1.0
+.\scripts\build-release.ps1 -Version 1.1.1
 ```
 
-Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.1.0`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
+Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.1.1`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
 
 ### Erstinstallation der Partitionstabelle
 
