@@ -45,8 +45,8 @@ Das Suchfeld filtert die Tabelle nach Adresse, englischem Namen, deutscher Besch
 |---:|---|---|
 | 5007 | Inside Temperature | Temperatur im Wechselrichter in °C. |
 | 5016 | Total DC Power | Momentane gesamte PV-Leistung in W. |
-| 5746 | DTSU666 import energy | Gesamter Netzbezug des Smart Meters in kWh. Das Register ist optional; nicht unterstützte Geräte zeigen einen entsprechenden Hinweis. |
-| 5748 | DTSU666 export energy | Gesamte Netzeinspeisung des Smart Meters in kWh. Ebenfalls optional. |
+| 5746 | DTSU666 import energy | Gesamter Netzbezug des Smart Meters in kWh. Das Register wird optional über die feste Unit-ID 254 gelesen; ein Fehler beeinflusst die übrige Abfrage nicht. |
+| 5748 | DTSU666 export energy | Gesamte Netzeinspeisung des Smart Meters in kWh, ebenfalls optional über Unit-ID 254. |
 | 13001 | Daily PV Generation | PV-Erzeugung des aktuellen Tages in kWh. |
 | 13002 | Total PV Generation | Gesamte PV-Erzeugung in kWh. |
 | 13004 | Daily export energy from PV | Heute aus PV eingespeiste Energie in kWh. |
@@ -57,7 +57,7 @@ Das Suchfeld filtert die Tabelle nach Adresse, englischem Namen, deutscher Besch
 | 13073 | Export Power Limit | Aktuell gelesene maximale Einspeiseleistung. Im Text wird sie anhand der konfigurierten PV-Leistung zusätzlich in Prozent umgerechnet. |
 | 13086 | Export Power Limitation | Zeigt, ob die Wechselrichterbegrenzung eingeschaltet (`0xAA`) oder ausgeschaltet (`0x55`) ist. |
 
-Ein Gedankenstrich bedeutet, dass noch kein frischer Wert vorliegt. „Nicht unterstützt“ bei 5746 oder 5748 bedeutet, dass der Wechselrichter die optionale Adresse abgewiesen hat; alle anderen Messwerte werden trotzdem weitergelesen.
+Ein Gedankenstrich bedeutet, dass noch kein frischer Wert vorliegt. „Nicht unterstützt“ bei 5746 oder 5748 bedeutet, dass das Smart Meter beziehungsweise die Weiterleitung über Unit-ID 254 die optionale Adresse abgewiesen hat; alle anderen Messwerte werden trotzdem weitergelesen.
 
 ## 4. Tab „Batterie“
 
@@ -108,7 +108,15 @@ Die Betriebsart wird hier nur angezeigt. Umschalten ist ausschließlich unter **
 | SOC-Fahrplan | Zeigt Prognoseplan, mindestens erforderlichen Batteriestand und den daraus gerasterten Freigabe-Zeitplan. Senkrechte Linien markieren den aktuellen Zeitpunkt und das geplante Ladeende. |
 | Open-Meteo-Werte je Dachfläche | Tabelle mit Datum/Uhrzeit, Gesamt-PV, erwarteter Last, Batterieenergie mit Vorzeichen, beiden SOC-Berechnungen, gerasterter Freigabe und der Einstrahlung auf jede aktivierte Dachfläche. Positiv bedeutet erwartete Ladung, negativ erwartete Entladung. |
 
-## 6. Tab „Lastprofil“
+## 6. Tab „Stromtarif“
+
+Der Tab zeigt den Preis- und Netzladeplan für den Zeitraum bis zum nächsten PV-Tag. Die vier Statuskarten enthalten Betriebsart, prognostizierten SOC und Energielücke, geplante Netzenergie/Kosten/Ziel-SOC sowie die ausschließlich gelesene Zwangslade- und Maximalleistung. Im Diagramm und in der Tabelle sind ausgewählte Ladeintervalle grün markiert. **Preise und Plan neu laden** stößt einen neuen Abruf an.
+
+**Nur planen** führt keine Wechselrichter-Schreibzugriffe aus. Erst die zweite Auswahl **Automatische Netzladung ausdrücklich freigeben** erlaubt die Ausführung. Ein Start ist nur bei aktuellen Preis- und Wetterdaten, absolutem Batterie-SOC 10743, plausiblem Batteriekapazitätswert, sicherem On-grid-Status sowie plausibler voreingestellter Zwangslade- und Maximalleistung möglich. Entfällt eine dieser Bedingungen, wird nicht gestartet beziehungsweise gestoppt.
+
+Die Firmware schreibt weder Zwangsladeleistung noch maximale Ladeleistung, Ladestrom oder BMS-Grenzen. Zum Start verwendet sie nur EMS-Modus, Ladebefehl und den berechneten SOC-Grenzwert. Vorher speichert sie den bisherigen EMS-Zustand und SOC-Grenzwert dauerhaft. Nach dem Ladefenster, beim Erreichen des geplanten SOC, bei Fehlern und nach einem Neustart wird zuerst `Stop` gesendet und anschließend werden vorheriger EMS-Modus und vorheriger SOC-Grenzwert wiederhergestellt.
+
+## 7. Tab „Lastprofil“
 
 | Zeile/Bedienung | Bedeutung |
 |---|---|
@@ -125,7 +133,7 @@ Die Tabelle darunter enthält für jeden 15-Minuten-Block die Spalten **Zeit**, 
 
 Das Lernprofil wird mindestens stündlich und unmittelbar vor einem Browser-Firmwareupdate gespeichert. Ein normales Firmwareupdate erhält es. Es geht nur durch **Lernprofil löschen**, vollständiges Löschen des ESP32-Flashs oder ein zukünftig inkompatibles Speicherformat verloren.
 
-## 7. Tab „Verlauf“
+## 8. Tab „Verlauf“
 
 | Zeile/Bedienung | Bedeutung |
 |---|---|
@@ -141,9 +149,9 @@ Das Lernprofil wird mindestens stündlich und unmittelbar vor einem Browser-Firm
 
 Der Verlauf schreibt alle fünf Minuten einen kompakten Messpunkt in eine Tagesdatei der separaten LittleFS-Partition. Gespeichert werden bis zu 31 Tage. Die Tagesansicht verwendet 5-Minuten-Werte, die Wochenansicht bildet 15-Minuten-Mittelwerte und die Monatsansicht Stundenmittelwerte. Die X-Achse zeigt Datum und Uhrzeit. Fehlende Einzelwerte werden als Lücke dargestellt. Jeder neue Punkt wird geschrieben und direkt zurückgelesen; die Aufzeichnung läuft unabhängig von Prognose oder Bypass. Tagesdateien außerhalb der Aufbewahrungsfrist werden automatisch entfernt.
 
-## 8. Tab „Einstellungen“
+## 9. Tab „Einstellungen“
 
-**Speichern und neu starten** legt die Werte dauerhaft ab. Das WLAN-Passwort sowie Pushover-Token und Pushover-User-Key werden nie zurück in das Formular geschrieben; leere Zugangsdatenfelder behalten den jeweiligen gespeicherten Wert, solange nicht ausdrücklich „löschen“ gewählt wird.
+**Speichern und neu starten** legt die Werte dauerhaft ab. Das WLAN-Passwort, der Stromtarif-API-Token sowie Pushover-Token und Pushover-User-Key werden nie zurück in das Formular geschrieben; leere Zugangsdatenfelder behalten den jeweiligen gespeicherten Wert, solange nicht ausdrücklich „löschen“ gewählt wird.
 
 ### WLAN
 
@@ -237,6 +245,24 @@ Bei gleichzeitig aktiven Eingängen gilt immer der kleinste Prozentwert. Erst we
 
 Nur aktivierte Stufen werden in Nummernreihenfolge addiert. Sind nur Stufe 1 mit 1.000 W und Stufe 5 mit 800 W aktiv, lauten die Schwellen 1.000 W und 1.800 W. Zusätzlich gelten 150 W Leistungshysterese und die getrennten Zeitverzögerungen. Fehlt der aktuelle Einspeisewert, werden alle Stufen sicher ausgeschaltet. Fehlgeschlagene API-Aufrufe werden frühestens nach zehn Sekunden erneut versucht.
 
+### Dynamischer Stromtarif
+
+| Feld | Wirkung |
+|---|---|
+| Preis- und Netzladeplan berechnen | Aktiviert Abruf und Vorschau. Alle Wechselrichter-Schreibzugriffe der Tarifautomatik bleiben aus. |
+| Automatische Netzladung ausdrücklich freigeben | Zweite, unabhängige Freigabe. Nur zusammen mit der Planung aktiv. |
+| Anbieter | Tibber, aWATTar Deutschland, Octopus Energy oder eigene REST-API. |
+| API-URL | Bei Octopus vollständige `standard-unit-rates`-URL; bei eigener API deren Endpunkt. Tibber und aWATTar besitzen feste Endpunkte. |
+| API-Token | Für Tibber erforderlich, für eine eigene API optional als Bearer-Token. Leer behält einen gespeicherten Token. |
+| Höchster Ladepreis | Nur Intervalle bis einschließlich dieser Preisgrenze werden berücksichtigt. Bei Octopus sind Preis und Grenzwerte in Pence/kWh, sonst in ct/kWh. |
+| Vergleichspreis Netzbezug | Preis, mit dem ein späterer normaler Netzbezug verglichen wird. |
+| Mindestersparnis | Nach Berücksichtigung des Ladewirkungsgrads muss mindestens diese Differenz zum Vergleichspreis verbleiben. |
+| aWATTar-Aufschlag / Umsatzsteuer | Wandelt den Börsenpreis von EUR/MWh in einen näherungsweisen persönlichen Endpreis um. Andere Anbieter liefern bereits Endpreiswerte. |
+| Maximaler SOC durch Netzladung | Obergrenze, bis zu der die Tarifautomatik aus dem Netz laden darf. |
+| Planungsreserve | Zusätzliche vorsichtige Energiemenge in Prozent der Batteriekapazität; weiterhin durch den maximalen Netzlade-SOC begrenzt. |
+
+Die eigene API muss `{"prices":[{"start":UNIX-Sekunden,"end":UNIX-Sekunden,"price":ct/kWh}]}` liefern. Native Anbieter werden per HTTPS mit Zertifikatsprüfung abgerufen. Eine benutzerdefinierte HTTPS-API muss einen unterstützten öffentlichen Zertifikatsweg verwenden; eine lokale unverschlüsselte API ist nur über `http://` vorgesehen.
+
 ### Pushover-Benachrichtigungen
 
 | Feld | Wirkung |
@@ -280,20 +306,20 @@ Die Verbindung zum offiziellen Endpunkt `https://api.pushover.net/1/messages.jso
 | WLAN-IP | Lokale Adresse im Heimnetz oder „nicht verbunden“. |
 | mDNS | Bequemer lokaler Name `http://solar-prognose-monitor.local`. |
 
-## 9. Tab „Firmware“
+## 10. Tab „Firmware“
 
 | Zeile/Bedienung | Bedeutung |
 |---|---|
 | Dateiauswahl | Erwartet die fertig kompilierte `.ino.bin`, passend zum ESP32 und zu dessen vorhandener 4-/8-MB-Partitionstabelle. |
 | Notfallfreigabe | Standardmäßig aus. Erlaubt diese eine Aktualisierung auch dann, wenn Lernprofil oder Verlauf nach dem Speichern nicht vollständig aus dem Flash zurückgelesen und bestätigt werden können. Dabei können diese Daten verloren gehen. |
-| Firmware hochladen | Fragt noch einmal nach, übernimmt den laufenden Lernblock, speichert Lernprofil und Verlauf und prüft beide Sicherungen durch Rücklesen. Nur bei erfolgreicher Prüfung – oder bewusst aktivierter Notfallfreigabe – werden die Überschuss-Ausgänge ausgeschaltet und die Firmware installiert. |
+| Firmware hochladen | Fragt noch einmal nach, beendet eine aktive Tarif-Netzladung sicher, übernimmt den laufenden Lernblock, speichert Lernprofil und Verlauf und prüft beide Sicherungen durch Rücklesen. Nur bei erfolgreicher Prüfung – oder bewusst aktivierter Notfallfreigabe – werden die Überschuss-Ausgänge ausgeschaltet und die Firmware installiert. Kann die Netzladung nicht sicher gestoppt und der EMS-Modus nicht wiederhergestellt werden, wird das Update unabhängig von der Notfallfreigabe abgebrochen. |
 | Fortschrittsbalken | Zeigt den übertragenen Anteil. |
 | Ergebnis | Meldet Erfolg oder Upload-/Schreibfehler. Nach Erfolg startet der ESP32 neu. |
 | Hinweis zur Partitionierung | Erklärt die einmalig erforderliche USB-Installation der Partitionstabelle sowie die automatische Datenmigration bei deaktiviertem vollständigem Löschen. |
 
 ArduinoOTA ist nicht enthalten. Das Browserupdate bleibt nach der einmaligen USB-Erstinstallation der vorgesehene Netzwerk-Updateweg. Version 1.0.0 darf nicht zur Erstinstallation auf einem frischen ESP32 verwendet werden: Ihre Partitionstabelle erwartete die App bei `0x20000`, der ESP32 Arduino Core 3.3.8 schrieb sie jedoch bei `0x10000`. Ab Version 1.0.1 stimmen Upload- und Partitionsadresse überein. Ein bereits laufendes Gerät wird mit der passenden normalen `Update.bin` über den Browser aktualisiert. Ein Update ersetzt das Programm, nicht die normal gespeicherten Einstellungen, Lastprofildaten und Verlaufsdateien. Vor jedem Update werden Lernprofil und Verlauf geprüft. Schlägt das fehl, bricht das Update im Normalfall ab. Die Notfallfreigabe verhindert einen Wartungs-Lockout, kann aber den Verlust der nicht bestätigten Daten nicht verhindern. 4- und 8-MB-Firmware sowie unterschiedliche Partitionsschemata dürfen nicht vertauscht werden.
 
-## 10. Tab „About“
+## 11. Tab „About“
 
 | Zeile/Bedienung | Bedeutung |
 |---|---|
@@ -317,9 +343,9 @@ ArduinoOTA ist nicht enthalten. Das Browserupdate bleibt nach der einmaligen USB
 
 Web-Debug kostet nur bei Aktivierung zusätzlichen RAM für den Textpuffer. Die Einstellung dient der Diagnose und ist für den Normalbetrieb nicht erforderlich.
 
-## 11. Berechnungen und interne Abläufe
+## 12. Berechnungen und interne Abläufe
 
-### 11.1 Skalierung wichtiger Modbuswerte
+### 12.1 Skalierung wichtiger Modbuswerte
 
 ```text
 Absoluter Batteriestand in % = Rohwert Adresse 10743 × 0,1
@@ -329,7 +355,7 @@ zu schreibender Rohwert    = gewünschter Max-SOC in % × 10
 
 Der Max-SOC wird auf Unit-ID 1 per Holding-Register geschrieben und sofort mit einem Holding-Read kontrolliert. Die Software schreibt nur 50 bis 100 %. Sie begrenzt die Freigabe zusätzlich auf mindestens den aktuellen direkten SOC sowie auf den zurückgelesenen Min-SOC.
 
-### 11.2 Open-Meteo und PV-Energie
+### 12.2 Open-Meteo und PV-Energie
 
 Für jede Open-Meteo-Stunde und jede aktivierte Dachfläche wird zunächst die PV-Leistung bestimmt. Anschließend wird die Stunde in vier Viertelstunden zerlegt:
 
@@ -363,7 +389,7 @@ Netto-Batterieenergie
 
 Für `:00`, `:15`, `:30` und `:45` wird jeweils der dazugehörige Lastprofilwert eingesetzt. Die Energie der vollständigen Wetterstunde ist die Summe dieser vier Ergebnisse. Übersteigt die gelernte Last die PV-Leistung, wird die resultierende Versorgungslücke als erwartete Batterieentladung geführt. Der rückwärts berechnete Mindest-SOC kann dadurch bereits vor einem regelmäßig auftretenden Großverbraucher steigen. Dabei wird konservativ angenommen, dass die Batterie die Lücke versorgt; ob real Batterie oder Netz einspringt, bestimmen Min-SOC, Betriebsart und Wechselrichtereinstellungen. Der betrachtete Zeitraum reicht vom Abrufzeitpunkt der aktuellen Prognose bis `Sonnenuntergang − Fertig-vor-Sonnenuntergang`. Angebrochene erste, letzte und laufende Viertelstunden werden nur mit ihrem tatsächlichen Zeitanteil berücksichtigt. Die SOC-Regelung bewertet den Plan an den Viertelstundengrenzen neu und prüft das konfigurierte Ladeende zusätzlich exakt. Schlägt eine Modbusabfrage fehl, wird bereits nach fünf Minuten erneut versucht.
 
-### 11.3 SOC-Fahrplan
+### 12.3 SOC-Fahrplan
 
 Beim Erstellen der Prognose wird der direkte Batterie-SOC als Start-SOC festgehalten.
 
@@ -430,7 +456,7 @@ Werte unter 3 % bleiben für besondere Anlagenkonfigurationen auswählbar. Da de
 
 Zum geplanten Ladeende wird der konfigurierte Max-SOC als Sonderfreigabe geschrieben. Fehlen direkte SOC- oder frische Wetterdaten, wird der Max-SOC einmalig sicher freigegeben. Diese Sonderfälle werden getrennt von normalen Regelwrites gezählt.
 
-### 11.4 Lernendes 15-Minuten-Lastprofil
+### 12.4 Lernendes 15-Minuten-Lastprofil
 
 Der Tag ist in 96 Viertelstunden unterteilt. Pro Wochentag werden Grundlast, Ereignisleistung und Ereigniswahrscheinlichkeit gespeichert. Eigene aktive Überschusslasten werden vor dem Lernen abgezogen. Diese 15-Minuten-Auflösung wird nicht nur angezeigt und gespeichert, sondern ab Version 1.2.0 vollständig in der Energie- und SOC-Prognose verwendet.
 
@@ -448,7 +474,7 @@ erwartete Last
 
 Liegt die Beobachtung deutlich über der Grundlast und über der eingestellten Großlastschwelle, wird der Mehrverbrauch als Ereignis gelernt. Dadurch kann etwa eine regelmäßig nachmittags stattfindende Autoladung nach mehreren passenden Tagen mit ihrer bisherigen Wahrscheinlichkeit berücksichtigt werden. Überschreitet diese erwartete Last später die prognostizierte PV-Leistung, fließt die Differenz als negative Batterieenergie in den Fahrplan ein. Spontane, zuvor nicht gelernte Verbraucher können dagegen nicht vorausgesagt werden.
 
-### 11.5 Kumulative Überschuss-Stufen
+### 12.5 Kumulative Überschuss-Stufen
 
 ```text
 verfügbarer Überschuss
@@ -465,7 +491,7 @@ Ausschaltschwelle
 
 Eine Stufe schaltet erst, wenn die entsprechende Bedingung zusätzlich für ihre Ein- oder Ausschaltverzögerung stabil war. Deaktivierte Nummern werden übersprungen und tragen nichts zur Summe bei.
 
-### 11.6 Rundsteuerempfänger und Exportlimit
+### 12.6 Rundsteuerempfänger und Exportlimit
 
 ```text
 installierte Gesamtleistung [W]
@@ -495,7 +521,7 @@ kein Eingang aktiv → kein neuer Schreibzugriff; letzter Wechselrichterwert ble
 
 Jede neue Kontaktlage muss zwei Sekunden stabil bleiben. Dadurch erzeugen kurzzeitige Überschneidungen beim mechanischen Umschalten keine unkontrollierten Schreibfolgen; falls Kontakte tatsächlich gleichzeitig aktiv bleiben, gewinnt aus Sicherheitsgründen die strengste Begrenzung.
 
-### 11.7 Anlagenverlauf
+### 12.7 Anlagenverlauf
 
 Leistungen werden im gespeicherten Ringpuffer platzsparend in 10-W-Schritten abgelegt, der SOC in 0,1-%-Schritten. Für die Anzeige werden sie wieder zurückgerechnet:
 
@@ -505,3 +531,33 @@ SOC [%]      = gespeicherter Wert × 0,1
 ```
 
 Beim Netzanschlusspunkt wird ein positiver Wert der Einspeisung und der Betrag eines negativen Werts dem Netzbezug zugeordnet. Der jeweils andere Anteil wird als null dargestellt.
+
+### 12.8 Dynamischer Stromtarif
+
+Ausgehend vom aktuellen absoluten SOC wird jede prognostizierte Viertelstunde bis zum nächsten geplanten Ladeende verrechnet:
+
+```text
+erwartete gespeicherte Energie am nächsten Ladeende
+  = aktuelle gespeicherte Energie
+    + Summe erwarteter PV-Ladung
+    − Summe erwarteter Lastentladung
+
+prognostizierter End-SOC
+  = erwartete gespeicherte Energie / Batteriekapazität × 100
+
+fehlende gespeicherte Energie
+  = Batteriekapazität × (eingestellter Max-SOC − End-SOC) / 100
+
+benötigte Netzenergie
+  = (fehlende gespeicherte Energie + Reserve) / Ladewirkungsgrad
+```
+
+Die Energie wird auf den noch freien Bereich bis zum maximalen Netzlade-SOC begrenzt. Geeignete Intervalle müssen vor dem nächsten Sonnenaufgang liegen, die Preisobergrenze einhalten und nach Wirkungsgrad mindestens die geforderte Ersparnis gegenüber dem Vergleichspreis liefern. Danach werden die günstigsten Intervalle gewählt; bei gleichem Preis wird das spätere bevorzugt.
+
+Für die Dauer gilt ausschließlich die vom Wechselrichter gelesene, zuvor fachgerecht konfigurierte Zwangsladeleistung:
+
+```text
+benötigte Zeit [h] = benötigte Netzenergie [kWh] / gelesene Zwangsladeleistung [kW]
+```
+
+Verwendet werden nullbasiert Holding 13049 (EMS-Modus), 13050 (Laden/Stop), 13051 (Zwangsladeleistung, nur lesen), 13057 (SOC-Obergrenze) und 33046 (maximale Ladeleistung, nur lesen; Rohwert × 10 W). Zwangsladeleistung und maximale Ladeleistung werden niemals geschrieben. Ist die Vorgabe null, fehlt sie oder liegt sie oberhalb der gelesenen Maximalleistung, bleibt die Automatik gesperrt.

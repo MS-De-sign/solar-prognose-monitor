@@ -279,6 +279,14 @@ Die Firmwareprüfung ruft höchstens einmal täglich das neueste stabile Release
 
 Bei vollständigem Strom- oder Internetausfall kann der ESP32 naturgemäß keine Sofortmeldung übertragen. Auch bei nahtlosem Inselbetrieb müssen ESP32, Router und Internetzugang weiter versorgt werden; die Netzwerkkomponenten müssen dafür am Ersatzstrom hängen. Sobald Gerät, WLAN, Internet und NTP-Zeit wieder verfügbar sind, wird der Start/Neustart gemeldet. Die Funktion ist eine Komfortbenachrichtigung und keine zertifizierte Alarmanlage.
 
+### Dynamischer Stromtarif
+
+Die Tarifsteuerung ist zweistufig. **Planen** lädt Preise und berechnet aus der Open-Meteo-Zwei-Tage-Prognose, dem absoluten Batterie-SOC, der Kapazität und dem gelernten Lastprofil die voraussichtliche Energielücke am nächsten Ladeende. Diese Stufe schreibt nichts. Erst die zusätzliche ausdrückliche Automatikfreigabe darf die ausgewählten günstigen Intervalle ausführen.
+
+Tibber liefert Endpreise in EUR/kWh und wird in ct/kWh umgerechnet. aWATTar liefert EUR/MWh; der Börsenwert wird mit 0,1 in ct/kWh umgerechnet und danach um den eingestellten Aufschlag sowie die Umsatzsteuer ergänzt. Octopus liefert `value_inc_vat` in Pence/kWh; deshalb müssen dort Preisgrenze, Vergleichspreis und Ersparnis ebenfalls in Pence/kWh eingetragen werden. Die eigene API liefert normalisierte UNIX-Zeitintervalle und Preise in ct/kWh.
+
+Die Firmware liest nullbasiert Holding 13051 als bereits konfigurierte Zwangsladeleistung in Watt und 33046 als maximale Ladeleistung mit Faktor 10 W. Beide Register bleiben strikt read-only. Die Ladedauer ergibt sich aus fehlender Energie geteilt durch die gelesene Zwangsladeleistung. Zum Start werden nur EMS-Modus 13049, Lade-/Stopbefehl 13050 und die bestehende SOC-Obergrenze 13057 verwendet und alle Schreibwerte verifiziert. Unplausible Leistungswerte, fehlender On-grid-Status, veraltete Preise/Wetterdaten oder fehlender direkter Batterie-SOC sperren die Ausführung.
+
 ## 7. Angezeigte Modbus-Werte
 
 Die Weboberfläche verwendet die nullbasierten Modbus-Adressen aus dem Sketch:
@@ -287,7 +295,7 @@ Die Weboberfläche verwendet die nullbasierten Modbus-Adressen aus dem Sketch:
 |---|---:|---|
 | Wechselrichter | 5007 | Wechselrichtertemperatur |
 | Wechselrichter | 5016 | aktuelle PV-Leistung |
-| Wechselrichter | 5746 / 5748 | gesamter Netzbezug / gesamte Netzeinspeisung des Smart Meters |
+| Smart Meter über feste Unit-ID 254 | 5746 / 5748 | gesamter Netzbezug / gesamte Netzeinspeisung; ein Fehler bleibt optional und beeinflusst die Wechselrichterabfrage nicht |
 | Wechselrichter | 13001 / 13002 | PV-Erzeugung heute / gesamt |
 | Wechselrichter | 13004 / 13005 | PV-Einspeiseenergie heute / gesamt |
 | Wechselrichter | 13007 | aktuelle Haus-/Lastleistung; Grundlage des Lernprofils |

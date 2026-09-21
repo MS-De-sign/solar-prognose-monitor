@@ -2,6 +2,19 @@
 
 ## Unveröffentlicht
 
+## 1.3.0 – 2026-09-21
+
+- ergänzt den Tab **Stromtarif** und eine zweistufige Steuerung für dynamische Tarife: zunächst reine Planung, automatische Netzladung nur nach einer separaten ausdrücklichen Freigabe
+- unterstützt Tibber, aWATTar Deutschland, Octopus Energy und eine normierte eigene REST-API
+- verbindet die Zwei-Tage-Open-Meteo-Prognose mit absolutem Batterie-SOC, Batteriekapazität und gelerntem 15-Minuten-Lastprofil, um den voraussichtlich fehlenden Energieanteil bis zum nächsten Ladeende zu bestimmen
+- wählt nur Preisintervalle unter Preisgrenze und Mindestersparnis aus; Wirkungsgrad, aWATTar-Aufschlag/Steuer, Planungsreserve und maximaler Netzlade-SOC sind konfigurierbar
+- liest die bereits vom Installateur hinterlegte Zwangsladeleistung und maximale Ladeleistung ausschließlich aus; die Firmware schreibt weder diese Leistungswerte noch Strom- oder BMS-Grenzen
+- sperrt die Automatik bei fehlenden oder unplausiblen Leistungswerten, fehlendem absoluten SOC, veralteten Preisen/Wetterdaten oder fehlendem On-grid-Status
+- speichert vor dem Start einen Wiederherstellungsauftrag und stoppt nach Neustart zuerst die Zwangsladung, bevor der vorherige EMS-Modus wiederhergestellt wird
+- stellt die optionalen Smart-Meter-Zählerstände 5746/5748 von Wechselrichter-ID 1 auf die eigene Modbus Unit-ID 254 um
+- benennt die Erklärung von **Ideal laden** verständlicher: Nutzung des ganzen Tages zum gleichmäßigen Laden
+- bleibt mit 1.389.188 Byte Programmspeicher und 75.632 Byte globalem RAM auch in der 4-MB-Variante nutzbar
+
 ## 1.2.0 – 2026-09-21
 
 - ergänzt unter Einstellungen die Ladestrategien **Ideal laden** und **Vorausladen**

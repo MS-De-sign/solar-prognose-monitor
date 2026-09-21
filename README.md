@@ -16,13 +16,14 @@ Der Hausverbrauch wird für jeden Wochentag in 15-Minuten-Blöcken gelernt. Wied
 
 Die Steuerung gibt den zulässigen Ladezielwert schrittweise frei. Bei einer unerwarteten Wolkenphase wartet sie nicht auf eine verpasste Zwischenstufe, sondern wechselt auf den zur aktuellen Uhrzeit vorgesehenen Wert. Zusätzlich prüft sie, welcher Batteriestand mindestens freigegeben werden muss, damit das Tagesziel mit der noch erwarteten Energie erreichbar bleibt. Sicherheitsreserve, gewünschtes Ladeende und Schrittweite lassen sich einstellen. Da Wetter- und Verbrauchsprognosen nie vollkommen exakt sind, ersetzt das System keine Anlagenüberwachung und sollte bei der ersten Inbetriebnahme kontrolliert werden.
 
-Aktuelle Version: **1.2.0**
+Aktuelle Version: **1.3.0**
 
 **Hardwarestand:** Die aktuelle Firmware ist für ein klassisches **ESP32 DevKit mit ESP32-WROOM-Modul** ausgelegt. Weitere ESP32-Varianten wie der **ESP32-C3** werden derzeit getestet; Pinbelegung, Partitionierung und Programmcode werden dafür schrittweise angepasst. Bis eine Variante ausdrücklich als unterstützt gekennzeichnet ist, sollte dafür nicht ungeprüft die DevKit-Firmware verwendet werden.
 
 ## Funktionen
 
 - Modbus TCP, Modbus RTU/RS485 oder beide Transportwege
+- Smart-Meter-Gesamtwerte 5746/5748 über die eigene Sungrow Unit-ID 254
 - absoluter Batteriestand über TCP-ID 2 oder RS485-ID 200; kein relativer Wechselrichter-SOC als Regelungsersatz
 - getrennte Webansichten für Wechselrichter und Batterie
 - eigener WLAN-Access-Point mit dauerhaft gespeicherten WLAN-Einstellungen
@@ -35,6 +36,7 @@ Aktuelle Version: **1.2.0**
 - Browser-Firmwareupdate mit verifizierter Sicherung von Lernprofil und Verlauf; bewusst bestätigbare Notfallfreigabe bei Speicherproblemen
 - About-Seite mit Firmware-Version, Hersteller, Lizenzstatus und Flashgröße; Web-Debug ist dort integriert
 - einzeln auswählbare Pushover-Meldungen bei ESP32-Start, Modbus-Ausfall, Netzausfall/Inselbetrieb und Wiederherstellung, täglicher Sonnenuntergangsbericht und neue GitHub-Firmwareversion
+- dynamische Stromtarife über Tibber, aWATTar, Octopus Energy oder eine normierte eigene REST-API; zunächst reine Planung, automatische Netzladung nur nach separater ausdrücklicher Freigabe
 - kompatibel mit ESP32 Arduino Core 3.3.8
 - eigene Partitionstabellen für 4 MB und 8 MB: bestehende 20-KB-System-NVS, zusätzliche 64-KB-Profil-NVS, zwei große OTA-Slots und eine separate LittleFS-Verlaufspartition
 - optionale Smart-Meter-Zählerstände 5746 und 5748: nicht unterstützte Register beeinträchtigen die übrige Modbus-Abfrage nicht
@@ -52,6 +54,14 @@ Es gibt genau einen konfigurierbaren Ladezielwert im Bereich von 50 bis 100 Proz
 **Wichtig bei Wartung und Inbetriebnahme:** Vor Wartungs-, Service-, Umbau- oder Inbetriebnahmearbeiten an Wechselrichter oder Batteriesystem muss die Batteriespeicher-Steuerung unter **Einstellungen** auf **Bypass** gestellt und gespeichert werden. Dadurch erfolgen nach dem einmaligen, geprüften Bypass-Auftrag keine regelmäßigen Max-SOC-Eingriffe mehr. Besonders wichtig ist dies bei einer Batterieerweiterung: Sungrow kann den Speicher während der Angleichung neuer Batteriemodule automatisch bis ungefähr 40 % laden oder entladen. Im Prognosebetrieb könnten wiederholte Max-SOC-Freigaben diesen Ablauf beeinflussen. Erst nach vollständig abgeschlossenen Arbeiten und Freigabe durch den Fachbetrieb darf wieder auf Prognose umgestellt werden. Hersteller- und Fachbetriebsvorgaben haben immer Vorrang.
 
 Die technische Umsetzung verwendet Modbus Unit-ID 1 und das Holding-Register für den Max-SOC. Jeder Schreibvorgang wird zurückgelesen und nur bei passendem Ergebnis als erfolgreich gewertet. Register, Skalierung und vollständige Berechnung sind in der [Dokumentation](docs/Webinterface-und-Prognoseberechnung.md) beschrieben.
+
+## Dynamischer Stromtarif
+
+Version 1.3.0 berechnet den voraussichtlichen Batteriestand am Ende des nächsten PV-Tages aus Open-Meteo, absolutem Batterie-SOC und gelerntem Lastprofil. Bleibt eine Energielücke, sucht die Software vor dem nächsten Sonnenaufgang nach ausreichend günstigen Preisintervallen. Unterstützt werden Tibber, aWATTar, Octopus Energy und eine dokumentierte eigene REST-API.
+
+Die Funktion arbeitet bewusst zweistufig: **Preis- und Netzladeplan berechnen** zeigt zunächst nur den Plan. Erst **Automatische Netzladung ausdrücklich freigeben** erlaubt Schreibzugriffe. Die Software liest die vom Installateur hinterlegte Zwangsladeleistung und maximale Ladeleistung lediglich aus. Sie verändert niemals Ladeleistung, maximalen Ladestrom oder BMS-Grenzen. Fehlen plausible Werte, Wetterdaten, absoluter SOC, On-grid-Status oder aktuelle Preise, bleibt die Automatik gesperrt beziehungsweise beendet die Ladung. Vor dem Start wird ein dauerhafter Wiederherstellungsauftrag gespeichert, damit ein ESP32-Neustart zuerst einen Stop-Befehl sendet und anschließend den vorherigen EMS-Modus sowie den vorherigen SOC-Grenzwert wiederherstellt.
+
+Die Funktion ist keine Arbitrage- oder Gewinnzusage. Preis-APIs, Wechselrichter-Firmware und Tarifbestandteile können sich ändern. Die erste Nutzung muss unter Beobachtung erfolgen; Vorgaben von Hersteller, Installateur und Netzbetreiber haben Vorrang.
 
 ## Rundsteuerempfänger
 
@@ -97,10 +107,10 @@ Der Sketch verwendet ausschließlich Bibliotheken aus dem ESP32-Core.
 Für einen reproduzierbaren Build beider Varianten im Projektordner ausführen:
 
 ```powershell
-.\scripts\build-release.ps1 -Version 1.2.0
+.\scripts\build-release.ps1 -Version 1.3.0
 ```
 
-Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.2.0`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
+Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.3.0`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
 
 ### Erstinstallation der Partitionstabelle
 

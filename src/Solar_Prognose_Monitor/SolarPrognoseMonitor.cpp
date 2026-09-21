@@ -37,7 +37,7 @@
   Solar Prognose Monitor fuer ESP32 mit 4 oder 8 MB Flash
 
   - Liest eine kompakte Auswahl relevanter Sungrow-Werte mit mehreren Unit-IDs.
-  - Wechselrichter/Smart Meter standardmaessig ueber Unit-ID 1.
+  - Wechselrichter ueber Unit-ID 1, Smart Meter ueber Unit-ID 254.
   - Direkter Batterie-SOC/SOH ueber TCP-Unit-ID 2 oder RS485-Unit-ID 200.
   - Fuenf frei konfigurierbare kumulative GPIO-/HTTP-API-Stufen.
   - Browser-Firmwareupdate und gepufferter Web-Debug, kein ArduinoOTA.
@@ -61,7 +61,7 @@
 */
 
 namespace ConfigDefaults {
-constexpr char FIRMWARE_VERSION[] = "1.2.0";
+constexpr char FIRMWARE_VERSION[] = "1.3.0";
 constexpr char MANUFACTURER[] = "MS-De-sign / Marcus Sonntag";
 constexpr char LICENSE_TEXT[] = "PolyForm Noncommercial License 1.0.0";
 constexpr char PROJECT_URL[] = "https://github.com/MS-De-sign/solar-prognose-monitor";
@@ -69,6 +69,7 @@ constexpr uint16_t MODBUS_PORT = 502;
 constexpr uint8_t MODBUS_UNIT = 1;
 constexpr uint8_t BATTERY_TCP_UNIT = 2;
 constexpr uint8_t BATTERY_RTU_UNIT = 200;
+constexpr uint8_t SMART_METER_UNIT = 254;
 constexpr uint16_t POLL_SECONDS = 5;
 constexpr char AP_PASSWORD[] = "solar123";  // mindestens 8 Zeichen
 constexpr char MDNS_NAME[] = "solar-prognose-monitor";
@@ -86,6 +87,15 @@ constexpr uint16_t MAX_SOC_HOLDING_ADDRESS = 13057;
 constexpr uint16_t MIN_SOC_HOLDING_ADDRESS = 13058;
 constexpr uint16_t EXPORT_LIMIT_WATTS_HOLDING_ADDRESS = 13073;
 constexpr uint16_t EXPORT_LIMIT_ENABLE_HOLDING_ADDRESS = 13086;
+// Nullbasierte Modbus-Adressen aus der Sungrow-Holding-Registerliste.
+// Die beiden Leistungswerte werden aus Sicherheitsgruenden ausschliesslich gelesen.
+constexpr uint16_t EMS_MODE_HOLDING_ADDRESS = 13049;
+constexpr uint16_t EMS_COMMAND_HOLDING_ADDRESS = 13050;
+constexpr uint16_t FORCED_CHARGE_POWER_HOLDING_ADDRESS = 13051;
+constexpr uint16_t MAX_CHARGE_POWER_HOLDING_ADDRESS = 33046;
+constexpr uint16_t EMS_MODE_FORCED = 0x0002;
+constexpr uint16_t EMS_COMMAND_CHARGE = 0x00AA;
+constexpr uint16_t EMS_COMMAND_STOP = 0x00CC;
 constexpr uint16_t EXPORT_LIMIT_ENABLED_RAW = 0x00AA;
 constexpr uint16_t EXPORT_LIMIT_DISABLED_RAW = 0x0055;
 constexpr uint32_t RIPPLE_DEBOUNCE_MS = 2000;
@@ -105,6 +115,9 @@ constexpr char GITHUB_LATEST_RELEASE_ENDPOINT[] =
     "https://api.github.com/repos/MS-De-sign/solar-prognose-monitor/releases/latest";
 constexpr uint32_t VERSION_CHECK_INTERVAL_SECONDS = 24UL * 60UL * 60UL;
 constexpr uint32_t VERSION_CHECK_RETRY_MS = 6UL * 60UL * 60UL * 1000UL;
+constexpr uint32_t TARIFF_FETCH_INTERVAL_MS = 3UL * 60UL * 60UL * 1000UL;
+constexpr uint32_t TARIFF_RETRY_INTERVAL_MS = 15UL * 60UL * 1000UL;
+constexpr uint32_t TARIFF_CONTROL_INTERVAL_MS = 30UL * 1000UL;
 constexpr char HISTORY_PARTITION_LABEL[] = "history";
 constexpr char HISTORY_DIRECTORY[] = "/history";
 constexpr char PROFILE_PARTITION_LABEL[] = "profile";
@@ -158,6 +171,97 @@ HU6+4WMBzzuqQhFkoJ2UOQIReVx7Hfpkue4WQrO/isIJxOzksU0CMQDpKmFHjFJKS04YcPbWRNZu
 -----END CERTIFICATE-----
 )PEM";
 
+// Vertrauensanker fuer die nativen Strompreis-APIs. Kundenspezifische APIs
+// koennen aus Sicherheitsgruenden nur unverschluesselt im lokalen Netz oder
+// mit einem der hier bekannten, geprueften Zertifikatswege genutzt werden.
+const char AMAZON_ROOT_CA_1[] PROGMEM = R"PEM(-----BEGIN CERTIFICATE-----
+MIIDQTCCAimgAwIBAgITBmyfz5m/jAo54vB4ikPmljZbyjANBgkqhkiG9w0BAQsF
+ADA5MQswCQYDVQQGEwJVUzEPMA0GA1UEChMGQW1hem9uMRkwFwYDVQQDExBBbWF6
+b24gUm9vdCBDQSAxMB4XDTE1MDUyNjAwMDAwMFoXDTM4MDExNzAwMDAwMFowOTEL
+MAkGA1UEBhMCVVMxDzANBgNVBAoTBkFtYXpvbjEZMBcGA1UEAxMQQW1hem9uIFJv
+b3QgQ0EgMTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALJ4gHHKeNXj
+ca9HgFB0fW7Y14h29Jlo91ghYPl0hAEvrAIthtOgQ3pOsqTQNroBvo3bSMgHFzZM
+9O6II8c+6zf1tRn4SWiw3te5djgdYZ6k/oI2peVKVuRF4fn9tBb6dNqcmzU5L/qw
+IFAGbHrQgLKm+a/sRxmPUDgH3KKHOVj4utWp+UhnMJbulHheb4mjUcAwhmahRWa6
+VOujw5H5SNz/0egwLX0tdHA114gk957EWW67c4cX8jJGKLhD+rcdqsq08p8kDi1L
+93FcXmn/6pUCyziKrlA4b9v7LWIbxcceVOF34GfID5yHI9Y/QCB/IIDEgEw+OyQm
+jgSubJrIqg0CAwEAAaNCMEAwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMC
+AYYwHQYDVR0OBBYEFIQYzIU07LwMlJQuCFmcx7IQTgoIMA0GCSqGSIb3DQEBCwUA
+A4IBAQCY8jdaQZChGsV2USggNiMOruYou6r4lK5IpDB/G/wkjUu0yKGX9rbxenDI
+U5PMCCjjmCXPI6T53iHTfIUJrU6adTrCC2qJeHZERxhlbI1Bjjt/msv0tadQ1wUs
+N+gDS63pYaACbvXy8MWy7Vu33PqUXHeeE6V/Uq2V8viTO96LXFvKWlJbYK8U90vv
+o/ufQJVtMVT8QtPHRh8jrdkPSHCa2XV4cdFyQzR1bldZwgJcJmApzyMZFo6IQ6XU
+5MsI+yMRQ+hDKXJioaldXgjUkK642M4UwtBV8ob2xJNDd2ZhwLnoQdeXeGADbkpy
+rqXRfboQnoZsG4q5WTP468SQvvG5
+-----END CERTIFICATE-----
+)PEM";
+
+const char GTS_ROOT_R1[] PROGMEM = R"PEM(-----BEGIN CERTIFICATE-----
+MIIFVzCCAz+gAwIBAgINAgPlk28xsBNJiGuiFzANBgkqhkiG9w0BAQwFADBHMQsw
+CQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU
+MBIGA1UEAxMLR1RTIFJvb3QgUjEwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAw
+MDAwWjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZp
+Y2VzIExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjEwggIiMA0GCSqGSIb3DQEBAQUA
+A4ICDwAwggIKAoICAQC2EQKLHuOhd5s73L+UPreVp0A8of2C+X0yBoJx9vaMf/vo
+27xqLpeXo4xL+Sv2sfnOhB2x+cWX3u+58qPpvBKJXqeqUqv4IyfLpLGcY9vXmX7w
+Cl7raKb0xlpHDU0QM+NOsROjyBhsS+z8CZDfnWQpJSMHobTSPS5g4M/SCYe7zUjw
+TcLCeoiKu7rPWRnWr4+wB7CeMfGCwcDfLqZtbBkOtdh+JhpFAz2weaSUKK0Pfybl
+qAj+lug8aJRT7oM6iCsVlgmy4HqMLnXWnOunVmSPlk9orj2XwoSPwLxAwAtcvfaH
+szVsrBhQf4TgTM2S0yDpM7xSma8ytSmzJSq0SPly4cpk9+aCEI3oncKKiPo4Zor8
+Y/kB+Xj9e1x3+naH+uzfsQ55lVe0vSbv1gHR6xYKu44LtcXFilWr06zqkUspzBmk
+MiVOKvFlRNACzqrOSbTqn3yDsEB750Orp2yjj32JgfpMpf/VjsPOS+C12LOORc92
+wO1AK/1TD7Cn1TsNsYqiA94xrcx36m97PtbfkSIS5r762DL8EGMUUXLeXdYWk70p
+aDPvOmbsB4om3xPXV2V4J95eSRQAogB/mqghtqmxlbCluQ0WEdrHbEg8QOB+DVrN
+VjzRlwW5y0vtOUucxD/SVRNuJLDWcfr0wbrM7Rv1/oFB2ACYPTrIrnqYNxgFlQID
+AQABo0IwQDAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4E
+FgQU5K8rJnEaK0gnhS9SZizv8IkTcT4wDQYJKoZIhvcNAQEMBQADggIBAJ+qQibb
+C5u+/x6Wki4+omVKapi6Ist9wTrYggoGxval3sBOh2Z5ofmmWJyq+bXmYOfg6LEe
+QkEzCzc9zolwFcq1JKjPa7XSQCGYzyI0zzvFIoTgxQ6KfF2I5DUkzps+GlQebtuy
+h6f88/qBVRRiClmpIgUxPoLW7ttXNLwzldMXG+gnoot7TiYaelpkttGsN/H9oPM4
+7HLwEXWdyzRSjeZ2axfG34arJ45JK3VmgRAhpuo+9K4l/3wV3s6MJT/KYnAK9y8J
+ZgfIPxz88NtFMN9iiMG1D53Dn0reWVlHxYciNuaCp+0KueIHoI17eko8cdLiA6Ef
+MgfdG+RCzgwARWGAtQsgWSl4vflVy2PFPEz0tv/bal8xa5meLMFrUKTX5hgUvYU/
+Z6tGn6D/Qqc6f1zLXbBwHSs09dR2CQzreExZBfMzQsNhFRAbd03OIozUhfJFfbdT
+6u9AWpQKXCBfTkBdYiJ23//OYb2MI3jSNwLgjt7RETeJ9r/tSQdirpLsQBqvFAnZ
+0E6yove+7u7Y/9waLd64NnHi/Hm3lCXRSHNboTXns5lndcEZOitHTtNCjv0xyBZm
+2tIMPNuzjsmhDYAPexZ3FL//2wmUspO8IFgV6dtxQ/PeEMMA3KgqlbbC1j+Qa3bb
+bP6MvPJwNQzcmRk13NfIRmPVNnGuV/u3gm3c
+-----END CERTIFICATE-----
+)PEM";
+
+const char ISRG_ROOT_X1[] PROGMEM = R"PEM(-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----
+)PEM";
+
 constexpr size_t SURPLUS_STAGE_COUNT = 5;
 constexpr size_t RIPPLE_INPUT_COUNT = 4;
 constexpr size_t DEBUG_BUFFER_MAX = 12000;
@@ -167,6 +271,7 @@ constexpr size_t FORECAST_POINT_COUNT = FORECAST_HOURLY_POINT_COUNT * 4;
 constexpr size_t LOAD_PROFILE_DAYS = 7;
 constexpr size_t LOAD_PROFILE_SLOTS = 96;
 constexpr size_t HISTORY_POINT_COUNT = 288;
+constexpr size_t TARIFF_SLOT_COUNT = 192;
 constexpr int16_t HISTORY_INVALID_POWER = INT16_MIN;
 constexpr uint16_t HISTORY_INVALID_SOC = UINT16_MAX;
 const uint8_t SAFE_OUTPUT_GPIOS[] = {4, 13, 14, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
@@ -183,7 +288,8 @@ enum class ValueType : uint8_t {
 
 enum class SourceGroup : uint8_t {
   INVERTER,
-  BATTERY
+  BATTERY,
+  METER
 };
 
 enum class WebView : uint8_t {
@@ -220,6 +326,8 @@ struct RegisterDef {
   {addr, SourceGroup::BATTERY, WebView::BATTERY, en, de, unitText, valueType, 1, scale, add, digits, 0.0, false, 0}
 #define BAT200_32(addr, en, de, unitText, valueType, scale, add, digits) \
   {addr, SourceGroup::BATTERY, WebView::BATTERY, en, de, unitText, valueType, 2, scale, add, digits, 0.0, false, 0}
+#define METER32(addr, en, de, unitText, valueType, scale, add, digits) \
+  {addr, SourceGroup::METER, WebView::INVERTER, en, de, unitText, valueType, 2, scale, add, digits, 0.0, false, 0}
 
 #if 0  // Vollstaendige historische Registerliste; zugunsten des Flashbedarfs bewusst deaktiviert.
 RegisterDef registers[] = {
@@ -398,8 +506,8 @@ static_assert(REGISTER_COUNT == 153, "Die Registerliste muss genau 153 Eintraege
 RegisterDef registers[] = {
   REG16(5007, "Inside Temperature", "Temperatur im Wechselrichter", "°C", ValueType::S16, 0.1f, 0.0f, 1),
   REG32(5016, "Total DC Power", "PV-Leistung aktuell", "W", ValueType::U32_WORD_SWAPPED, 1.0f, 0.0f, 0),
-  REG32(5746, "DTSU666 import energy", "Smart Meter Netzbezug gesamt", "kWh", ValueType::U32_WORD_SWAPPED, 0.01f, 0.0f, 2),
-  REG32(5748, "DTSU666 export energy", "Smart Meter Netzeinspeisung gesamt", "kWh", ValueType::U32_WORD_SWAPPED, 0.01f, 0.0f, 2),
+  METER32(5746, "DTSU666 import energy", "Smart Meter Netzbezug gesamt", "kWh", ValueType::U32_WORD_SWAPPED, 0.01f, 0.0f, 2),
+  METER32(5748, "DTSU666 export energy", "Smart Meter Netzeinspeisung gesamt", "kWh", ValueType::U32_WORD_SWAPPED, 0.01f, 0.0f, 2),
   REG16(13001, "Daily PV Generation", "PV-Erzeugung heute", "kWh", ValueType::U16, 0.1f, 0.0f, 1),
   REG32(13002, "Total PV Generation", "PV-Erzeugung gesamt", "kWh", ValueType::U32_WORD_SWAPPED, 0.1f, 0.0f, 1),
   REG16(13004, "Daily export energy from PV", "PV-Einspeiseenergie heute", "kWh", ValueType::U16, 0.1f, 0.0f, 1),
@@ -424,6 +532,7 @@ RegisterDef registers[] = {
 #undef BREG32
 #undef BAT200_16
 #undef BAT200_32
+#undef METER32
 
 constexpr size_t REGISTER_COUNT = sizeof(registers) / sizeof(registers[0]);
 static_assert(REGISTER_COUNT == 20, "Die kompakte Registerliste muss genau 20 Eintraege enthalten.");
@@ -439,8 +548,8 @@ struct ReadBlock {
 const ReadBlock readBlocks[] = {
   {SourceGroup::INVERTER, 5007, 1, false},
   {SourceGroup::INVERTER, 5016, 2, false},
-  {SourceGroup::INVERTER, 5746, 2, true},
-  {SourceGroup::INVERTER, 5748, 2, true},
+  {SourceGroup::METER, 5746, 2, true},
+  {SourceGroup::METER, 5748, 2, true},
   {SourceGroup::INVERTER, 13001, 13, false},
   {SourceGroup::INVERTER, 13021, 4, false},
   // Nicht alle Firmwarestaende stellen "Grid state" bereit. Eine Modbus-
@@ -515,6 +624,18 @@ struct AppConfig {
   bool pushoverDailyPv;
   bool pushoverDailyBattery;
   bool pushoverNotifyUpdate;
+  bool tariffPlanningEnabled;
+  bool tariffAutomationApproved;
+  uint8_t tariffProvider;
+  String tariffApiUrl;
+  String tariffToken;
+  float tariffMaximumCents;
+  float tariffReferenceCents;
+  float tariffMinimumSavingCents;
+  float tariffSurchargeCents;
+  float tariffVatPercent;
+  uint8_t tariffMaximumGridSoc;
+  uint8_t tariffReservePercent;
 } config;
 
 enum class ModbusMode : uint8_t {
@@ -526,6 +647,13 @@ enum class ModbusMode : uint8_t {
 enum class ChargingStrategy : uint8_t {
   IDEAL,
   ADVANCE
+};
+
+enum class TariffProvider : uint8_t {
+  TIBBER,
+  AWATTAR,
+  OCTOPUS,
+  CUSTOM
 };
 
 enum class ApiMethod : uint8_t {
@@ -583,6 +711,9 @@ struct ForecastState {
   time_t sunrise;
   time_t sunset;
   time_t finishAt;
+  time_t tomorrowSunrise;
+  time_t tomorrowSunset;
+  time_t tomorrowFinishAt;
   float startSoc;
   float currentSoc;
   float plannedSoc;
@@ -594,6 +725,34 @@ struct ForecastState {
   float totalBatteryDischargeKwh;
   float totalBatteryEnergyKwh;
   ForecastPoint points[FORECAST_POINT_COUNT];
+};
+
+struct TariffSlot {
+  time_t start;
+  time_t end;
+  float centsPerKwh;
+  bool selected;
+};
+
+struct TariffState {
+  bool valid;
+  bool fetching;
+  bool charging;
+  bool recoveryPending;
+  String status;
+  time_t fetchedAt;
+  uint8_t slotCount;
+  float predictedEndSoc;
+  float missingStoredKwh;
+  float plannedGridKwh;
+  float plannedTargetSoc;
+  float selectedCostEuro;
+  uint16_t forcedChargePowerWatts;
+  uint16_t maximumChargePowerWatts;
+  uint16_t originalEmsMode;
+  uint16_t originalEmsCommand;
+  uint16_t originalMaxSocRaw;
+  TariffSlot slots[TARIFF_SLOT_COUNT];
 };
 
 struct LoadProfileData {
@@ -642,6 +801,7 @@ constexpr uint16_t HISTORY_FILE_VERSION = 1;
 static_assert(sizeof(LoadProfileData) < 8192, "Das Lastprofil muss kompakt genug fuer NVS bleiben.");
 static_assert(sizeof(HistoryData) < 5000, "Der 24-Stunden-RAM-Puffer muss kompakt bleiben.");
 ForecastState forecast;
+TariffState tariff;
 LoadProfileData loadProfile;
 HistoryData historyData;
 uint16_t todayLoadWatts[LOAD_PROFILE_SLOTS] = {};
@@ -664,6 +824,9 @@ uint32_t lastHistoryPersistedEpoch = 0;
 int lastHistoryCleanupYearDay = -1;
 uint32_t nextForecastFetchAt = 0;
 uint32_t nextForecastControlAt = 0;
+uint32_t nextTariffFetchAt = 0;
+uint32_t nextTariffControlAt = 0;
+uint32_t nextTariffPlanAt = 0;
 uint16_t holdingMaxSocRaw = 0;
 uint16_t holdingMinSocRaw = 0;
 bool holdingSocValid = false;
@@ -1254,7 +1417,7 @@ main{max-width:1100px;margin:22px auto;padding:0 18px}.status{display:flex;flex-
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line)}th{font-size:12px;text-transform:uppercase;color:var(--muted)}tr:last-child td{border-bottom:0}.value{font-weight:650;white-space:nowrap}.addr{color:var(--muted);font-variant-numeric:tabular-nums}.empty{padding:20px;color:var(--muted)}
 @media(max-width:650px){.bar{align-items:flex-start;flex-wrap:wrap}.nav{width:100%}th:nth-child(2),td:nth-child(2){display:none}th,td{padding:9px 10px}}
 </style></head><body>
-<header><div class="bar"><h1 id="pageTitle">Solar Prognose Monitor</h1><nav class="nav"><a id="navInverter" href="/inverter">Wechselrichter</a><a id="navBattery" href="/battery">Batterie</a><a href="/forecast">Prognose</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header>
+<header><div class="bar"><h1 id="pageTitle">Solar Prognose Monitor</h1><nav class="nav"><a id="navInverter" href="/inverter">Wechselrichter</a><a id="navBattery" href="/battery">Batterie</a><a href="/forecast">Prognose</a><a href="/tariff">Stromtarif</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header>
 <main><div class="status" id="status"><span class="pill">Wird geladen …</span></div>
 <div class="tools"><input id="search" type="search" placeholder="Messwert oder Adresse suchen …" autocomplete="off"></div>
 <div id="content"><div class="group"><div class="empty">Messwerte werden geladen …</div></div></div></main>
@@ -1285,7 +1448,7 @@ const char SETTINGS_HEAD[] PROGMEM = R"HTML(
 :root{--bg:#f3f5f7;--card:#fff;--text:#17212b;--muted:#64717d;--accent:#087f5b;--line:#dfe4e8}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}
 header{background:var(--card);border-bottom:1px solid var(--line)}.bar{max-width:760px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}.nav{display:flex;gap:8px}.nav a{color:var(--text);text-decoration:none;padding:8px 11px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}
 main{max-width:820px;margin:22px auto;padding:0 18px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}h2{font-size:17px;margin:0 0 15px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.full{grid-column:1/-1}label{display:block;font-weight:600;margin-bottom:5px}input,select,textarea{width:100%;padding:10px 11px;border:1px solid #cbd2d8;border-radius:8px;background:#fff;font:inherit}textarea{min-height:76px;resize:vertical}.hint{color:var(--muted);font-size:13px;margin:6px 0 0}.caution{background:#fff7dd;border:1px solid #e7c95d;border-radius:9px;color:#684f00;padding:11px 13px;line-height:1.45}.check{display:flex;gap:9px;align-items:center;font-weight:400}.check input{width:auto}.stage-card{border:1px solid var(--line);border-radius:10px;margin:12px 0;background:#fafbfb}.stage-card summary{cursor:pointer;padding:13px 14px;font-weight:700}.stage-body{padding:4px 14px 15px}.type-panel{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}.hidden{display:none}.button{border:0;border-radius:9px;background:var(--accent);color:#fff;padding:11px 16px;font:inherit;font-weight:650;cursor:pointer}.button.secondary{background:#66727d}.result{display:inline-block;margin-left:10px;color:var(--muted)}.info{line-height:1.6}@media(max-width:620px){.bar{flex-wrap:wrap}.nav{width:100%;overflow-x:auto}.grid{grid-template-columns:1fr}.full{grid-column:auto}.result{display:block;margin:10px 0 0}}
-</style></head><body><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a class="active" href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header><main>
+</style></head><body><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a href="/tariff">Stromtarif</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a class="active" href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header><main>
 )HTML";
 
 String htmlEscape(const String &input) {
@@ -1417,6 +1580,18 @@ void setDefaultForecastConfig() {
   config.forecastStaleHours = 6;
   config.learningPercent = 20;
   config.eventLoadThresholdWatts = 1800;
+  config.tariffPlanningEnabled = false;
+  config.tariffAutomationApproved = false;
+  config.tariffProvider = static_cast<uint8_t>(TariffProvider::AWATTAR);
+  config.tariffApiUrl = "";
+  config.tariffToken = "";
+  config.tariffMaximumCents = 10.0f;
+  config.tariffReferenceCents = 28.0f;
+  config.tariffMinimumSavingCents = 3.0f;
+  config.tariffSurchargeCents = 0.0f;
+  config.tariffVatPercent = 19.0f;
+  config.tariffMaximumGridSoc = 80;
+  config.tariffReservePercent = 5;
   for (size_t i = 0; i < PV_ARRAY_COUNT; ++i) {
     config.pvArrays[i].enabled = i == 0;
     config.pvArrays[i].name = i == 0 ? "Dach 1" : "Dach " + String(i + 1);
@@ -1455,6 +1630,26 @@ void sanitizeForecastConfig() {
   config.forecastStaleHours = constrain(config.forecastStaleHours, config.forecastFetchHours, 24);
   config.learningPercent = constrain(config.learningPercent, 1, 100);
   config.eventLoadThresholdWatts = constrain(config.eventLoadThresholdWatts, 250, 20000);
+  config.tariffProvider = constrain(config.tariffProvider,
+                                    static_cast<uint8_t>(TariffProvider::TIBBER),
+                                    static_cast<uint8_t>(TariffProvider::CUSTOM));
+  if (!isfinite(config.tariffMaximumCents)) config.tariffMaximumCents = 10.0f;
+  if (!isfinite(config.tariffReferenceCents)) config.tariffReferenceCents = 28.0f;
+  if (!isfinite(config.tariffMinimumSavingCents)) config.tariffMinimumSavingCents = 3.0f;
+  if (!isfinite(config.tariffSurchargeCents)) config.tariffSurchargeCents = 0.0f;
+  if (!isfinite(config.tariffVatPercent)) config.tariffVatPercent = 19.0f;
+  config.tariffMaximumCents = constrain(config.tariffMaximumCents, -100.0f, 200.0f);
+  config.tariffReferenceCents = constrain(config.tariffReferenceCents, 0.0f, 200.0f);
+  config.tariffMinimumSavingCents = constrain(config.tariffMinimumSavingCents, 0.0f, 100.0f);
+  config.tariffSurchargeCents = constrain(config.tariffSurchargeCents, -100.0f, 100.0f);
+  config.tariffVatPercent = constrain(config.tariffVatPercent, 0.0f, 100.0f);
+  config.tariffMaximumGridSoc = constrain(config.tariffMaximumGridSoc,
+                                          ConfigDefaults::MIN_MAX_SOC_PERCENT, 100);
+  config.tariffReservePercent = constrain(config.tariffReservePercent, 0, 30);
+  config.tariffApiUrl.trim();
+  config.tariffToken.trim();
+  if (config.tariffApiUrl.length() > 500) config.tariffApiUrl.remove(500);
+  if (config.tariffToken.length() > 300) config.tariffToken.remove(300);
   for (size_t i = 0; i < PV_ARRAY_COUNT; ++i) {
     PvArrayConfig &array = config.pvArrays[i];
     array.name.trim();
@@ -1610,6 +1805,22 @@ void loadConfig() {
   config.forecastStaleHours = preferences.getUChar("stalehrs", config.forecastStaleHours);
   config.learningPercent = preferences.getUChar("learnpct", config.learningPercent);
   config.eventLoadThresholdWatts = preferences.getUShort("eventw", config.eventLoadThresholdWatts);
+  config.tariffPlanningEnabled = preferences.getBool("tplan", config.tariffPlanningEnabled);
+  config.tariffAutomationApproved = preferences.getBool("tauto", config.tariffAutomationApproved);
+  config.tariffProvider = preferences.getUChar("tprovider", config.tariffProvider);
+  config.tariffApiUrl = preferences.getString("turl", config.tariffApiUrl);
+  config.tariffToken = preferences.getString("ttoken", config.tariffToken);
+  config.tariffMaximumCents = preferences.getFloat("tmax", config.tariffMaximumCents);
+  config.tariffReferenceCents = preferences.getFloat("tref", config.tariffReferenceCents);
+  config.tariffMinimumSavingCents = preferences.getFloat("tsave", config.tariffMinimumSavingCents);
+  config.tariffSurchargeCents = preferences.getFloat("tadd", config.tariffSurchargeCents);
+  config.tariffVatPercent = preferences.getFloat("tvat", config.tariffVatPercent);
+  config.tariffMaximumGridSoc = preferences.getUChar("tmaxsoc", config.tariffMaximumGridSoc);
+  config.tariffReservePercent = preferences.getUChar("treserve", config.tariffReservePercent);
+  tariff.recoveryPending = preferences.getBool("tactive", false);
+  tariff.originalEmsMode = preferences.getUShort("temsmode", 0);
+  tariff.originalEmsCommand = preferences.getUShort("temscmd", 0);
+  tariff.originalMaxSocRaw = preferences.getUShort("tmaxold", 1000);
   forecastRestorePending = preferences.getBool("fcrestore", false);
   config.rippleEnabled = preferences.getBool("rcen", config.rippleEnabled);
   config.rippleSignalMode = preferences.getUChar("rcmode", config.rippleSignalMode);
@@ -1756,6 +1967,18 @@ void saveConfig() {
   preferences.putUChar("stalehrs", config.forecastStaleHours);
   preferences.putUChar("learnpct", config.learningPercent);
   preferences.putUShort("eventw", config.eventLoadThresholdWatts);
+  preferences.putBool("tplan", config.tariffPlanningEnabled);
+  preferences.putBool("tauto", config.tariffAutomationApproved);
+  preferences.putUChar("tprovider", config.tariffProvider);
+  preferences.putString("turl", config.tariffApiUrl);
+  preferences.putString("ttoken", config.tariffToken);
+  preferences.putFloat("tmax", config.tariffMaximumCents);
+  preferences.putFloat("tref", config.tariffReferenceCents);
+  preferences.putFloat("tsave", config.tariffMinimumSavingCents);
+  preferences.putFloat("tadd", config.tariffSurchargeCents);
+  preferences.putFloat("tvat", config.tariffVatPercent);
+  preferences.putUChar("tmaxsoc", config.tariffMaximumGridSoc);
+  preferences.putUChar("treserve", config.tariffReservePercent);
   preferences.putBool("fcrestore", forecastRestorePending);
   preferences.putBool("rcen", config.rippleEnabled);
   preferences.putUChar("rcmode", config.rippleSignalMode);
@@ -2412,7 +2635,7 @@ bool writeAndVerifyHolding(uint16_t address, uint16_t requested) {
   delay(80);
   uint16_t verify = 0;
   if (!readHoldingRegistersConfigured(address, 1, &verify) || verify != requested) {
-    lastTransactionError = "Rundsteuer-Schreibwert an Adresse " + String(address) + " konnte nicht verifiziert werden";
+    lastTransactionError = "Holding-Schreibwert an Adresse " + String(address) + " konnte nicht verifiziert werden";
     return false;
   }
   return true;
@@ -2503,6 +2726,7 @@ void serviceRippleControl() {
 
 String unitLabelFor(SourceGroup source) {
   if (source == SourceGroup::INVERTER) return "ID " + String(config.inverterUnit);
+  if (source == SourceGroup::METER) return "Smart-Meter-ID " + String(ConfigDefaults::SMART_METER_UNIT);
   if (selectedModbusMode() == ModbusMode::TCP_ONLY) return "TCP-ID " + String(config.batteryTcpUnit);
   if (selectedModbusMode() == ModbusMode::RTU_ONLY) return "RS485-ID " + String(config.batteryRtuUnit);
   return "TCP-ID " + String(config.batteryTcpUnit) + " / RS485-ID " + String(config.batteryRtuUnit);
@@ -2557,7 +2781,9 @@ void servicePolling() {
   OptionalReadResult optionalResult = OptionalReadResult::FAILED;
   bool readOk = false;
   if (block.optional) {
-    optionalResult = readOptionalInputRegistersConfigured(config.inverterUnit, block.start,
+    const uint8_t unitId = block.source == SourceGroup::METER
+        ? ConfigDefaults::SMART_METER_UNIT : config.inverterUnit;
+    optionalResult = readOptionalInputRegistersConfigured(unitId, block.start,
                                                           block.count, words);
     readOk = optionalResult == OptionalReadResult::OK;
   } else {
@@ -3564,7 +3790,7 @@ bool fetchOpenMeteoArray(size_t arrayIndex, bool initializeTimes) {
   url += F("&timezone=auto&timeformat=unixtime&forecast_days=2");
 
   NetworkClientSecure secureClient;
-  secureClient.setInsecure();  // Open-Meteo HTTPS ohne lokalen CA-Speicher
+  secureClient.setCACert(ISRG_ROOT_X1);
   HTTPClient http;
   http.setConnectTimeout(6000);
   http.setTimeout(9000);
@@ -3601,8 +3827,12 @@ bool fetchOpenMeteoArray(size_t arrayIndex, bool initializeTimes) {
     forecast.pointCount = static_cast<uint8_t>(timeCount);
     for (size_t i = 0; i < timeCount; ++i) forecast.points[i].epoch = static_cast<time_t>(values[i]);
     const int dailyObject = json.indexOf("\"daily\":");
-    if (jsonNumberArray(json, "sunrise", values, 2, dailyObject) > 0) forecast.sunrise = static_cast<time_t>(values[0]);
-    if (jsonNumberArray(json, "sunset", values, 2, dailyObject) > 0) forecast.sunset = static_cast<time_t>(values[0]);
+    const size_t sunriseCount = jsonNumberArray(json, "sunrise", values, 2, dailyObject);
+    if (sunriseCount > 0) forecast.sunrise = static_cast<time_t>(values[0]);
+    if (sunriseCount > 1) forecast.tomorrowSunrise = static_cast<time_t>(values[1]);
+    const size_t sunsetCount = jsonNumberArray(json, "sunset", values, 2, dailyObject);
+    if (sunsetCount > 0) forecast.sunset = static_cast<time_t>(values[0]);
+    if (sunsetCount > 1) forecast.tomorrowSunset = static_cast<time_t>(values[1]);
   }
 
   const size_t gtiCount = jsonNumberArray(json, "global_tilted_irradiance", values,
@@ -3680,6 +3910,11 @@ void calculateForecastPlan() {
   const time_t planStart = forecast.fetchedAt > 0 ? forecast.fetchedAt : now;
   forecast.finishAt = forecast.sunset - static_cast<time_t>(config.finishBufferMinutes) * 60;
   if (forecast.finishAt <= forecast.sunrise) forecast.finishAt = forecast.sunset;
+  forecast.tomorrowFinishAt = forecast.tomorrowSunset
+      - static_cast<time_t>(config.finishBufferMinutes) * 60;
+  if (forecast.tomorrowFinishAt <= forecast.tomorrowSunrise) {
+    forecast.tomorrowFinishAt = forecast.tomorrowSunset;
+  }
   forecast.totalPvKwh = 0.0f;
   forecast.totalLearnedLoadKwh = 0.0f;
   forecast.totalBatteryChargeKwh = 0.0f;
@@ -3835,6 +4070,339 @@ bool forecastIsFresh() {
       && time(nullptr) - forecast.fetchedAt <= static_cast<time_t>(config.forecastStaleHours) * 3600;
 }
 
+const char *tariffProviderName() {
+  switch (static_cast<TariffProvider>(config.tariffProvider)) {
+    case TariffProvider::TIBBER: return "Tibber";
+    case TariffProvider::AWATTAR: return "aWATTar";
+    case TariffProvider::OCTOPUS: return "Octopus Energy";
+    case TariffProvider::CUSTOM: return "Benutzerdefinierte API";
+  }
+  return "Unbekannt";
+}
+
+bool parseIso8601Utc(const String &text, time_t &epoch) {
+  if (text.length() < 19) return false;
+  int year, month, day, hour, minute, second;
+  if (sscanf(text.c_str(), "%d-%d-%dT%d:%d:%d", &year, &month, &day,
+             &hour, &minute, &second) != 6) return false;
+  if (month < 1 || month > 12 || day < 1 || day > 31
+      || hour < 0 || hour > 23 || minute < 0 || minute > 59
+      || second < 0 || second > 60) return false;
+  // Kalenderdatum ohne Abhängigkeit von der lokalen TZ in UNIX-Zeit wandeln
+  // (Howard Hinnants days-from-civil-Algorithmus).
+  int civilYear = year - (month <= 2 ? 1 : 0);
+  const int era = (civilYear >= 0 ? civilYear : civilYear - 399) / 400;
+  const unsigned yearOfEra = static_cast<unsigned>(civilYear - era * 400);
+  const unsigned shiftedMonth = static_cast<unsigned>(month + (month > 2 ? -3 : 9));
+  const unsigned dayOfYear = (153U * shiftedMonth + 2U) / 5U + static_cast<unsigned>(day) - 1U;
+  const unsigned dayOfEra = yearOfEra * 365U + yearOfEra / 4U - yearOfEra / 100U + dayOfYear;
+  const int64_t days = static_cast<int64_t>(era) * 146097LL
+      + static_cast<int64_t>(dayOfEra) - 719468LL;
+  time_t parsed = static_cast<time_t>(days * 86400LL + hour * 3600LL + minute * 60LL + second);
+  if (parsed <= 0) return false;
+  const int plus = text.indexOf('+', 19);
+  const int minus = text.indexOf('-', 19);
+  const int offsetAt = plus >= 0 ? plus : minus;
+  if (offsetAt >= 0 && text.length() >= static_cast<unsigned int>(offsetAt + 6)) {
+    const int offsetHours = text.substring(offsetAt + 1, offsetAt + 3).toInt();
+    const int offsetMinutes = text.substring(offsetAt + 4, offsetAt + 6).toInt();
+    const int offsetSeconds = (offsetHours * 60 + offsetMinutes) * 60;
+    parsed += text[offsetAt] == '+' ? -offsetSeconds : offsetSeconds;
+  }
+  epoch = parsed;
+  return true;
+}
+
+void sortTariffSlots() {
+  for (size_t i = 1; i < tariff.slotCount; ++i) {
+    const TariffSlot value = tariff.slots[i];
+    size_t j = i;
+    while (j > 0 && tariff.slots[j - 1].start > value.start) {
+      tariff.slots[j] = tariff.slots[j - 1];
+      --j;
+    }
+    tariff.slots[j] = value;
+  }
+  for (size_t i = 0; i < tariff.slotCount; ++i) {
+    if (tariff.slots[i].end <= tariff.slots[i].start) {
+      tariff.slots[i].end = i + 1 < tariff.slotCount
+          ? tariff.slots[i + 1].start
+          : tariff.slots[i].start + 3600;
+    }
+  }
+}
+
+bool appendTariffSlot(time_t start, time_t end, float cents) {
+  if (tariff.slotCount >= TARIFF_SLOT_COUNT || start <= 0 || !isfinite(cents)) return false;
+  TariffSlot &slot = tariff.slots[tariff.slotCount++];
+  slot.start = start;
+  slot.end = end;
+  slot.centsPerKwh = cents;
+  slot.selected = false;
+  return true;
+}
+
+bool parseTariffObjects(const String &json, const String &anchorKey,
+                        const String &startKey, const String &endKey,
+                        const String &priceKey, bool timestampsAreMilliseconds,
+                        float priceMultiplier, bool applyConfiguredCosts) {
+  int position = 0;
+  while (tariff.slotCount < TARIFF_SLOT_COUNT) {
+    position = json.indexOf("\"" + anchorKey + "\"", position);
+    if (position < 0) break;
+    const int objectStart = json.lastIndexOf('{', position);
+    const int objectEnd = json.indexOf('}', position);
+    if (objectStart < 0 || objectEnd < 0) break;
+    const String object = json.substring(objectStart, objectEnd + 1);
+    time_t start = 0;
+    time_t end = 0;
+    double numeric = 0.0;
+    String text;
+    if (jsonNumber(object, startKey, numeric)) {
+      start = static_cast<time_t>(numeric / (timestampsAreMilliseconds ? 1000.0 : 1.0));
+    } else if (jsonString(object, startKey, text)) {
+      parseIso8601Utc(text, start);
+    }
+    if (jsonNumber(object, endKey, numeric)) {
+      end = static_cast<time_t>(numeric / (timestampsAreMilliseconds ? 1000.0 : 1.0));
+    } else if (jsonString(object, endKey, text)) {
+      parseIso8601Utc(text, end);
+    }
+    double price = NAN;
+    jsonNumber(object, priceKey, price);
+    float cents = static_cast<float>(price) * priceMultiplier;
+    if (applyConfiguredCosts) {
+      cents = (cents + config.tariffSurchargeCents) * (1.0f + config.tariffVatPercent / 100.0f);
+    }
+    appendTariffSlot(start, end, cents);
+    position = objectEnd + 1;
+  }
+  sortTariffSlots();
+  return tariff.slotCount > 0;
+}
+
+bool parseTibberPrices(const String &json) {
+  // Tibber liefert EUR/kWh und einen Beginn; das Ende ergibt sich aus dem
+  // folgenden Eintrag. "total" enthaelt bereits Steuern und Zuschlaege.
+  return parseTariffObjects(json, "startsAt", "startsAt", "endsAt", "total",
+                            false, 100.0f, false);
+}
+
+bool fetchTariffPrices() {
+  if (!config.tariffPlanningEnabled) return false;
+  if (WiFi.status() != WL_CONNECTED || !clockIsValid()) {
+    tariff.status = "WLAN oder Uhrzeit für den Strompreisabruf fehlt";
+    return false;
+  }
+  tariff.fetching = true;
+  tariff.slotCount = 0;
+  memset(tariff.slots, 0, sizeof(tariff.slots));
+  String url;
+  String body;
+  bool post = false;
+  const TariffProvider provider = static_cast<TariffProvider>(config.tariffProvider);
+  if (provider == TariffProvider::TIBBER) {
+    url = "https://api.tibber.com/v1-beta/gql";
+    body = F("{\"query\":\"{viewer{homes{currentSubscription{priceInfo{today{total startsAt}tomorrow{total startsAt}}}}}}\"}");
+    post = true;
+    if (config.tariffToken.isEmpty()) {
+      tariff.status = "Tibber-Zugriffstoken fehlt";
+      tariff.fetching = false;
+      return false;
+    }
+  } else if (provider == TariffProvider::AWATTAR) {
+    const uint64_t startMs = static_cast<uint64_t>(time(nullptr)) * 1000ULL;
+    const uint64_t endMs = static_cast<uint64_t>(time(nullptr) + 48UL * 3600UL) * 1000ULL;
+    url = "https://api.awattar.de/v1/marketdata?start=" + String(startMs)
+        + "&end=" + String(endMs);
+  } else {
+    url = config.tariffApiUrl;
+    if (url.isEmpty()) {
+      tariff.status = provider == TariffProvider::OCTOPUS
+          ? "Octopus-Preis-URL fehlt" : "API-URL fehlt";
+      tariff.fetching = false;
+      return false;
+    }
+  }
+
+  HTTPClient http;
+  NetworkClientSecure secureClient;
+  WiFiClient plainClient;
+  const bool https = url.startsWith("https://");
+  bool begun = false;
+  if (https) {
+    secureClient.setCACert(provider == TariffProvider::AWATTAR ? ISRG_ROOT_X1 : AMAZON_ROOT_CA_1);
+    begun = http.begin(secureClient, url);
+  } else if (provider == TariffProvider::CUSTOM && url.startsWith("http://")) {
+    begun = http.begin(plainClient, url);
+  }
+  if (!begun) {
+    tariff.status = "Preis-URL oder TLS-Verbindung nicht unterstützt";
+    tariff.fetching = false;
+    return false;
+  }
+  http.setConnectTimeout(7000);
+  http.setTimeout(12000);
+  http.addHeader("Accept", "application/json");
+  if (!config.tariffToken.isEmpty()) http.addHeader("Authorization", "Bearer " + config.tariffToken);
+  int responseCode;
+  if (post) {
+    http.addHeader("Content-Type", "application/json");
+    responseCode = http.POST(body);
+  } else {
+    responseCode = http.GET();
+  }
+  if (responseCode != HTTP_CODE_OK) {
+    tariff.status = "Preis-API HTTP " + String(responseCode);
+    http.end();
+    tariff.fetching = false;
+    nextTariffFetchAt = millis() + ConfigDefaults::TARIFF_RETRY_INTERVAL_MS;
+    return false;
+  }
+  const String json = http.getString();
+  http.end();
+  bool parsed = false;
+  if (provider == TariffProvider::TIBBER) {
+    parsed = parseTibberPrices(json);
+  } else if (provider == TariffProvider::AWATTAR) {
+    // EUR/MWh -> ct/kWh: Faktor 0,1; anschliessend optionale Aufschlaege/Steuer.
+    parsed = parseTariffObjects(json, "start_timestamp", "start_timestamp", "end_timestamp",
+                                "marketprice", true, 0.1f, true);
+  } else if (provider == TariffProvider::OCTOPUS) {
+    parsed = parseTariffObjects(json, "valid_from", "valid_from", "valid_to",
+                                "value_inc_vat", false, 1.0f, false);
+  } else {
+    // Vertrag fuer eigene APIs:
+    // {"prices":[{"start":UNIX-Sekunden,"end":UNIX-Sekunden,"price":ct/kWh}]}
+    parsed = parseTariffObjects(json, "start", "start", "end", "price",
+                                false, 1.0f, false);
+  }
+  tariff.fetching = false;
+  tariff.valid = parsed;
+  if (!parsed) {
+    tariff.status = "Keine verwertbaren Preisintervalle in der API-Antwort";
+    nextTariffFetchAt = millis() + ConfigDefaults::TARIFF_RETRY_INTERVAL_MS;
+    return false;
+  }
+  tariff.fetchedAt = time(nullptr);
+  tariff.status = String(tariffProviderName()) + ": Preise geladen";
+  nextTariffFetchAt = millis() + ConfigDefaults::TARIFF_FETCH_INTERVAL_MS;
+  debugPrintf("Stromtarif: %u Intervalle von %s geladen.\n", tariff.slotCount, tariffProviderName());
+  return true;
+}
+
+bool readGridChargeLimits() {
+  uint16_t ems[3] = {};
+  uint16_t maximumRaw = 0;
+  if (!readHoldingRegistersConfigured(ConfigDefaults::EMS_MODE_HOLDING_ADDRESS, 3, ems)
+      || !readHoldingRegistersConfigured(ConfigDefaults::MAX_CHARGE_POWER_HOLDING_ADDRESS, 1, &maximumRaw)) {
+    tariff.status = "Netzladeparameter konnten nur lesend nicht ermittelt werden: " + lastTransactionError;
+    return false;
+  }
+  tariff.forcedChargePowerWatts = ems[2];
+  tariff.maximumChargePowerWatts = static_cast<uint16_t>(min<uint32_t>(65535UL,
+      static_cast<uint32_t>(maximumRaw) * 10UL));
+  if (tariff.forcedChargePowerWatts == 0 || tariff.maximumChargePowerWatts == 0
+      || tariff.forcedChargePowerWatts > tariff.maximumChargePowerWatts) {
+    tariff.status = "Automatik gesperrt: voreingestellte Netzladeleistung fehlt oder überschreitet die maximale Ladeleistung";
+    return false;
+  }
+  return true;
+}
+
+void calculateTariffPlan() {
+  nextTariffPlanAt = millis() + ConfigDefaults::FORECAST_SLICE_SECONDS * 1000UL;
+  for (size_t i = 0; i < tariff.slotCount; ++i) tariff.slots[i].selected = false;
+  tariff.predictedEndSoc = NAN;
+  tariff.missingStoredKwh = 0.0f;
+  tariff.plannedGridKwh = 0.0f;
+  tariff.plannedTargetSoc = NAN;
+  tariff.selectedCostEuro = 0.0f;
+  const time_t now = time(nullptr);
+  const bool beforeTodaySunrise = forecast.sunrise > now;
+  const time_t targetFinish = beforeTodaySunrise ? forecast.finishAt : forecast.tomorrowFinishAt;
+  if (!tariff.valid || !forecastIsFresh() || targetFinish <= now) {
+    tariff.status = "Für den Tarifplan fehlt eine aktuelle Zwei-Tage-Wetterprognose";
+    return;
+  }
+  const float capacity = configuredBatteryCapacityKwh();
+  const float currentSoc = currentBatterySoc();
+  if (!isfinite(capacity) || capacity <= 0.1f || !isfinite(currentSoc)) {
+    tariff.status = "Für den Tarifplan fehlen absolute Batteriegröße oder Batteriestand";
+    return;
+  }
+  float storedEnergy = capacity * currentSoc / 100.0f;
+  for (size_t i = 0; i < forecast.pointCount; ++i) {
+    const ForecastPoint &point = forecast.points[i];
+    const float hours = overlappingHours(point.epoch,
+        point.epoch + ConfigDefaults::FORECAST_SLICE_SECONDS, now, targetFinish);
+    if (hours <= 0.0f) continue;
+    storedEnergy += point.batteryEnergyKwh
+        * (hours / (ConfigDefaults::FORECAST_SLICE_SECONDS / 3600.0f));
+    storedEnergy = constrain(storedEnergy, 0.0f, capacity);
+  }
+  tariff.predictedEndSoc = constrain(storedEnergy / capacity * 100.0f, 0.0f, 100.0f);
+  tariff.missingStoredKwh = max(0.0f, capacity * (config.maxSoc - tariff.predictedEndSoc) / 100.0f);
+  if (tariff.missingStoredKwh <= 0.02f) {
+    tariff.status = "Plan: Wetter und Lastprofil reichen voraussichtlich für den Ziel-SOC";
+    return;
+  }
+  if (!readGridChargeLimits()) return;
+  const float headroomKwh = max(0.0f, capacity
+      * (config.tariffMaximumGridSoc - currentSoc) / 100.0f);
+  const float reserveKwh = capacity * config.tariffReservePercent / 100.0f;
+  const float storedFromGrid = min(headroomKwh, tariff.missingStoredKwh + reserveKwh);
+  if (storedFromGrid <= 0.02f) {
+    tariff.status = "Plan: Netzlade-SOC ist bereits erreicht; keine Netzladung vorgesehen";
+    return;
+  }
+  const float efficiency = max(0.5f, config.batteryChargeEfficiencyPercent / 100.0f);
+  const float requestedInputKwh = storedFromGrid / efficiency;
+  float remaining = requestedInputKwh;
+  const time_t selectionStart = beforeTodaySunrise ? now : max(now, forecast.sunset);
+  const time_t selectionEnd = beforeTodaySunrise ? forecast.sunrise : forecast.tomorrowSunrise;
+  // Preisguenstigste geeignete Intervalle auswaehlen. Gleiche Preise werden
+  // spaeter bevorzugt, damit vorher keine unnoetige Standzeit bei hohem SOC entsteht.
+  for (size_t chosen = 0; chosen < tariff.slotCount && remaining > 0.001f; ++chosen) {
+    int best = -1;
+    for (size_t i = 0; i < tariff.slotCount; ++i) {
+      const TariffSlot &slot = tariff.slots[i];
+      if (slot.selected || slot.end <= selectionStart || slot.start >= selectionEnd) continue;
+      if (slot.centsPerKwh > config.tariffMaximumCents) continue;
+      const float effectiveCost = slot.centsPerKwh / efficiency;
+      if (config.tariffReferenceCents - effectiveCost < config.tariffMinimumSavingCents) continue;
+      if (best < 0 || slot.centsPerKwh < tariff.slots[best].centsPerKwh
+          || (slot.centsPerKwh == tariff.slots[best].centsPerKwh && slot.start > tariff.slots[best].start)) {
+        best = static_cast<int>(i);
+      }
+    }
+    if (best < 0) break;
+    TariffSlot &slot = tariff.slots[best];
+    slot.selected = true;
+    const time_t usableStart = max(slot.start, selectionStart);
+    const time_t usableEnd = min(slot.end, selectionEnd);
+    const float energy = tariff.forcedChargePowerWatts / 1000.0f
+        * max<time_t>(0, usableEnd - usableStart) / 3600.0f;
+    const float used = min(remaining, energy);
+    tariff.selectedCostEuro += used * slot.centsPerKwh / 100.0f;
+    tariff.plannedGridKwh += used;
+    remaining -= used;
+  }
+  if (tariff.plannedGridKwh > 0.001f) {
+    tariff.plannedTargetSoc = min<float>(config.tariffMaximumGridSoc,
+        currentSoc + tariff.plannedGridKwh * efficiency / capacity * 100.0f);
+  }
+  if (tariff.plannedGridKwh <= 0.001f) {
+    tariff.status = "Plan: kein ausreichend günstiges Preisintervall gefunden";
+  } else if (remaining > 0.02f) {
+    tariff.status = "Plan unvollständig: günstige Zeit reicht nicht für die gesamte prognostizierte Lücke";
+  } else {
+    tariff.status = config.tariffAutomationApproved
+        ? "Plan bereit; automatische Netzladung ausdrücklich freigegeben"
+        : "Plan bereit; reine Vorschau ohne Netzlade-Schreibzugriffe";
+  }
+}
+
 int32_t forecastBatteryReserveWatts() {
   if (!config.forecastEnabled || config.forecastBypass || !forecastIsFresh()) return 0;
   const float soc = currentBatterySoc();
@@ -3961,6 +4529,7 @@ void scheduleNextForecastControl(bool retry = false) {
 }
 
 void serviceForecastCharging() {
+  if (tariff.charging || tariff.recoveryPending) return;
   if (!config.forecastEnabled && !forecastRestorePending) return;
   if (config.forecastEnabled && timeReached(nextForecastFetchAt) && WiFi.status() == WL_CONNECTED && clockIsValid()) {
     fetchOpenMeteoForecast();
@@ -4062,6 +4631,139 @@ void serviceForecastCharging() {
   }
 }
 
+bool tariffGridIsAvailable() {
+  RegisterDef *grid = findRegister(SourceGroup::INVERTER, 13029);
+  return registerIsFresh(grid, 30000UL)
+      && static_cast<uint16_t>(grid->value) == 0x0055;
+}
+
+void persistTariffChargeState(bool active) {
+  tariff.recoveryPending = active;
+  preferences.begin("sungrow", false);
+  preferences.putBool("tactive", active);
+  if (active) {
+    preferences.putUShort("temsmode", tariff.originalEmsMode);
+    preferences.putUShort("temscmd", tariff.originalEmsCommand);
+    preferences.putUShort("tmaxold", tariff.originalMaxSocRaw);
+  }
+  preferences.end();
+}
+
+bool stopTariffGridCharge(const String &reason) {
+  bool stopped = writeAndVerifyHolding(ConfigDefaults::EMS_COMMAND_HOLDING_ADDRESS,
+                                       ConfigDefaults::EMS_COMMAND_STOP);
+  bool restored = false;
+  if (stopped) {
+    restored = writeAndVerifyHolding(ConfigDefaults::EMS_MODE_HOLDING_ADDRESS,
+                                     tariff.originalEmsMode);
+  }
+  bool socRestored = false;
+  if (stopped && restored && tariff.originalMaxSocRaw >= 100 && tariff.originalMaxSocRaw <= 1000) {
+    socRestored = writeAndVerifyMaxSoc(tariff.originalMaxSocRaw, false);
+  }
+  if (!stopped || !restored || !socRestored) {
+    tariff.status = "Netzladung konnte nicht sicher beendet/wiederhergestellt werden: "
+        + lastTransactionError;
+    tariff.recoveryPending = true;
+    return false;
+  }
+  tariff.charging = false;
+  persistTariffChargeState(false);
+  tariff.status = "Netzladung beendet: " + reason;
+  debugPrintln(tariff.status);
+  return true;
+}
+
+bool startTariffGridCharge() {
+  if (!readGridChargeLimits() || !tariffGridIsAvailable()) {
+    if (!tariffGridIsAvailable()) tariff.status = "Automatik gesperrt: kein sicherer On-grid-Status";
+    return false;
+  }
+  const float soc = currentBatterySoc();
+  if (!isfinite(soc) || !isfinite(tariff.plannedTargetSoc) || tariff.plannedTargetSoc <= soc + 0.2f) {
+    tariff.status = "Netzladung nicht gestartet: geplanter SOC bereits erreicht";
+    return false;
+  }
+  uint16_t ems[2] = {};
+  if (!readHoldingRegistersConfigured(ConfigDefaults::EMS_MODE_HOLDING_ADDRESS, 2, ems)) {
+    tariff.status = "EMS-Ausgangszustand konnte nicht gelesen werden: " + lastTransactionError;
+    return false;
+  }
+  tariff.originalEmsMode = ems[0];
+  tariff.originalEmsCommand = ems[1];
+  if (!readSocHoldingRegisters()) {
+    tariff.status = "SOC-Ausgangszustand konnte nicht gelesen werden: " + lastTransactionError;
+    return false;
+  }
+  tariff.originalMaxSocRaw = holdingMaxSocRaw;
+  // Der Wiederherstellungsauftrag wird vor dem ersten Schreibzugriff dauerhaft
+  // abgelegt. Nach einem ESP-Neustart wird deshalb zuerst gestoppt und der alte
+  // EMS-Modus wiederhergestellt.
+  persistTariffChargeState(true);
+  if (!writeAndVerifyMaxSoc(static_cast<uint16_t>(lroundf(tariff.plannedTargetSoc * 10.0f)), false)
+      || !writeAndVerifyHolding(ConfigDefaults::EMS_MODE_HOLDING_ADDRESS,
+                                ConfigDefaults::EMS_MODE_FORCED)
+      || !writeAndVerifyHolding(ConfigDefaults::EMS_COMMAND_HOLDING_ADDRESS,
+                                ConfigDefaults::EMS_COMMAND_CHARGE)) {
+    stopTariffGridCharge("Start abgebrochen");
+    return false;
+  }
+  tariff.charging = true;
+  tariff.status = "Netzladung läuft mit der vom Installateur hinterlegten Leistung";
+  debugPrintf("Tarifladung gestartet: %.1f %% Ziel, %u W Vorgabe (nur gelesen).\n",
+              tariff.plannedTargetSoc, tariff.forcedChargePowerWatts);
+  return true;
+}
+
+bool currentTariffSlotSelected() {
+  const time_t now = time(nullptr);
+  for (size_t i = 0; i < tariff.slotCount; ++i) {
+    const TariffSlot &slot = tariff.slots[i];
+    if (slot.selected && now >= slot.start && now < slot.end) return true;
+  }
+  return false;
+}
+
+void serviceTariffControl() {
+  if (pollingCycleActive || !timeReached(nextTariffControlAt)) return;
+  nextTariffControlAt = millis() + ConfigDefaults::TARIFF_CONTROL_INTERVAL_MS;
+
+  if (tariff.recoveryPending && !tariff.charging) {
+    stopTariffGridCharge("gespeicherter Sicherheitsauftrag nach Neustart");
+    return;
+  }
+  if (!config.tariffPlanningEnabled) {
+    if (tariff.charging) stopTariffGridCharge("Tarifplanung deaktiviert");
+    return;
+  }
+  if (!forecastIsFresh() && timeReached(nextForecastFetchAt)
+      && WiFi.status() == WL_CONNECTED && clockIsValid()) {
+    fetchOpenMeteoForecast();
+  }
+  if (timeReached(nextTariffFetchAt) && WiFi.status() == WL_CONNECTED && clockIsValid()) {
+    if (fetchTariffPrices()) calculateTariffPlan();
+  } else if (tariff.valid && forecastIsFresh() && timeReached(nextTariffPlanAt)) {
+    calculateTariffPlan();
+  }
+
+  const bool priceFresh = tariff.valid && tariff.fetchedAt > 0
+      && time(nullptr) - tariff.fetchedAt <= 6UL * 3600UL;
+  const float soc = currentBatterySoc();
+  const bool mustStop = tariff.charging
+      && (!config.tariffAutomationApproved || !priceFresh || !forecastIsFresh()
+          || !tariffGridIsAvailable() || !currentTariffSlotSelected()
+          || !isfinite(soc) || !isfinite(tariff.plannedTargetSoc)
+          || soc + 0.2f >= tariff.plannedTargetSoc);
+  if (mustStop) {
+    stopTariffGridCharge("Preisfenster, Ziel oder Sicherheitsbedingung beendet");
+    return;
+  }
+  if (!tariff.charging && config.tariffAutomationApproved && priceFresh
+      && currentTariffSlotSelected()) {
+    startTariffGridCharge();
+  }
+}
+
 void addNoCacheHeaders() {
   server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
   server.sendHeader("Pragma", "no-cache");
@@ -4160,7 +4862,7 @@ void handleSettings() {
   if (config.chargingStrategy == static_cast<uint8_t>(ChargingStrategy::IDEAL)) part += F(" selected");
   part += F(">Ideal laden</option><option value='1'");
   if (config.chargingStrategy == static_cast<uint8_t>(ChargingStrategy::ADVANCE)) part += F(" selected");
-  part += F(">Vorausladen – 80 % bis zur Mitte</option></select><p class='hint'><b>Ideal laden</b> nutzt den bisherigen energie- und lastabhängigen Fahrplan. <b>Vorausladen</b> gibt bis zur Hälfte des nutzbaren PV-Zeitraums mindestens 80 % frei und verteilt die letzten 20 % bis zum geplanten Ladeende. Das ist vorsichtiger bei wechselnden oder noch nicht gut gelernten Lasten. Die Auswahl wirkt nur bei aktiver Prognose.</p></div><div class='caution full'><b>Wichtig bei Wartung und Inbetriebnahme:</b> Vor Wartungs-, Service-, Umbau- oder Inbetriebnahmearbeiten an Wechselrichter oder Batteriesystem auf Bypass umschalten und speichern. Besonders wichtig ist dies bei Batterieerweiterungen, weil das System zur Angleichung automatisch bis ungefähr 40 % laden oder entladen kann. Prognose erst nach vollständig abgeschlossenen und durch den Fachbetrieb freigegebenen Arbeiten wieder aktivieren. Hersteller- und Fachbetriebsvorgaben haben Vorrang.</div><label>Breitengrad<input name='lat' type='number' step='0.000001' min='-90' max='90' value='");
+  part += F(">Vorausladen – 80 % bis zur Mitte</option></select><p class='hint'><b>Ideal laden</b> nutzt den ganzen Tag zum gleichmäßigen Laden des Speichers. <b>Vorausladen</b> gibt bis zur Hälfte des nutzbaren PV-Zeitraums mindestens 80 % frei und verteilt die letzten 20 % bis zum geplanten Ladeende. Das ist vorsichtiger bei wechselnden oder noch nicht gut gelernten Lasten. Die Auswahl wirkt nur bei aktiver Prognose.</p></div><div class='caution full'><b>Wichtig bei Wartung und Inbetriebnahme:</b> Vor Wartungs-, Service-, Umbau- oder Inbetriebnahmearbeiten an Wechselrichter oder Batteriesystem auf Bypass umschalten und speichern. Besonders wichtig ist dies bei Batterieerweiterungen, weil das System zur Angleichung automatisch bis ungefähr 40 % laden oder entladen kann. Prognose erst nach vollständig abgeschlossenen und durch den Fachbetrieb freigegebenen Arbeiten wieder aktivieren. Hersteller- und Fachbetriebsvorgaben haben Vorrang.</div><label>Breitengrad<input name='lat' type='number' step='0.000001' min='-90' max='90' value='");
   part += String(config.latitude, 6);
   part += F("'></label><label>Längengrad<input name='lon' type='number' step='0.000001' min='-180' max='180' value='");
   part += String(config.longitude, 6);
@@ -4316,7 +5018,45 @@ void handleSettings() {
     sendChunk(card);
   }
 
-  part = F("<p class='hint'><b>Wichtig:</b> GPIOs dürfen Heizpatrone, Klimaanlage oder andere Netzlasten niemals direkt schalten. Verwende passend dimensionierte Relais, SSRs oder Schütze und lasse die Netzseite fachgerecht installieren.</p></section><section class='card'><h2>Pushover-Benachrichtigungen</h2><div class='grid'><label class='check full'><input type='checkbox' name='poEnabled' value='1'");
+  part = F("<p class='hint'><b>Wichtig:</b> GPIOs dürfen Heizpatrone, Klimaanlage oder andere Netzlasten niemals direkt schalten. Verwende passend dimensionierte Relais, SSRs oder Schütze und lasse die Netzseite fachgerecht installieren.</p></section>");
+  sendChunk(part);
+
+  part = F("<section class='card'><h2>Dynamischer Stromtarif</h2><div class='grid'><label class='check full'><input type='checkbox' name='tPlan' value='1'");
+  if (config.tariffPlanningEnabled) part += F(" checked");
+  part += F("> Preis- und Netzladeplan berechnen</label><label class='check full'><input type='checkbox' name='tAuto' value='1'");
+  if (config.tariffAutomationApproved) part += F(" checked");
+  part += F("> <b>Automatische Netzladung ausdrücklich freigeben</b></label><p class='hint full'>Die erste Auswahl plant nur und schreibt nichts. Erst die zweite, separate Freigabe darf günstige Zeitfenster automatisch nutzen. Die Software verändert niemals Ladeleistung, maximalen Ladestrom oder BMS-Grenzen. Sie liest ausschließlich die vom Installateur hinterlegte Zwangsladeleistung und die zulässige Maximalleistung. Ungültige Werte sperren die Automatik.</p><label>Anbieter<select name='tProvider' id='tProvider'><option value='0'");
+  if (config.tariffProvider == 0) part += F(" selected");
+  part += F(">Tibber</option><option value='1'");
+  if (config.tariffProvider == 1) part += F(" selected");
+  part += F(">aWATTar Deutschland</option><option value='2'");
+  if (config.tariffProvider == 2) part += F(" selected");
+  part += F(">Octopus Energy</option><option value='3'");
+  if (config.tariffProvider == 3) part += F(" selected");
+  part += F(">Eigene REST-API</option></select></label><label>API-URL (Octopus/eigene API)<input name='tUrl' maxlength='500' value='");
+  part += htmlEscape(config.tariffApiUrl);
+  part += F("' placeholder='https://…'></label><label>API-Token (Tibber/optional)<input name='tToken' type='password' maxlength='300' autocomplete='new-password' data-stored='");
+  part += config.tariffToken.isEmpty() ? F("0") : F("1");
+  part += F("' placeholder='");
+  part += config.tariffToken.isEmpty() ? F("Token") : F("Gespeichert – leer lassen zum Beibehalten");
+  part += F("'></label><label>Höchster Ladepreis (ct/kWh)<input name='tMax' type='number' min='-100' max='200' step='0.01' value='");
+  part += String(config.tariffMaximumCents, 2);
+  part += F("'></label><label>Vergleichspreis Netzbezug (ct/kWh)<input name='tRef' type='number' min='0' max='200' step='0.01' value='");
+  part += String(config.tariffReferenceCents, 2);
+  part += F("'></label><label>Mindestersparnis (ct/kWh)<input name='tSave' type='number' min='0' max='100' step='0.01' value='");
+  part += String(config.tariffMinimumSavingCents, 2);
+  part += F("'></label><label>aWATTar-Aufschlag (ct/kWh)<input name='tAdd' type='number' min='-100' max='100' step='0.01' value='");
+  part += String(config.tariffSurchargeCents, 2);
+  part += F("'></label><label>aWATTar-Umsatzsteuer (%)<input name='tVat' type='number' min='0' max='100' step='0.01' value='");
+  part += String(config.tariffVatPercent, 2);
+  part += F("'></label><label>Maximaler SOC durch Netzladung (%)<input name='tMaxSoc' type='number' min='50' max='100' value='");
+  part += String(config.tariffMaximumGridSoc);
+  part += F("'></label><label>Planungsreserve (% der Kapazität)<input name='tReserve' type='number' min='0' max='30' value='");
+  part += String(config.tariffReservePercent);
+  part += F("'></label><p class='hint full'><b>Eigene API:</b> erwartet <code>{&quot;prices&quot;:[{&quot;start&quot;:UNIX-Sekunden,&quot;end&quot;:UNIX-Sekunden,&quot;price&quot;:ct/kWh}]}</code>. Bei Octopus muss die vollständige <i>standard-unit-rates</i>-URL eingetragen werden; die Preiszahl ist dort Pence/kWh und muss mit den Grenzwerten in derselben Einheit verglichen werden. Automatisch ausgewählt werden nur günstige Intervalle vor dem nächsten Sonnenaufgang. Fehlt die Zeit, wird höchstens ein unvollständiger Plan angezeigt.</p></div></section>");
+  sendChunk(part);
+
+  part = F("<section class='card'><h2>Pushover-Benachrichtigungen</h2><div class='grid'><label class='check full'><input type='checkbox' name='poEnabled' value='1'");
   if (config.pushoverEnabled) part += F(" checked");
   part += F("> Meldungen an Pushover aktivieren</label><div class='full'><p class='hint'>Die gewünschten Ereignisse und Werte des Sonnenuntergangsberichts können unten einzeln ausgewählt werden. Für jedes Gerät bzw. jede Installation sollte in Pushover eine eigene Anwendung angelegt werden.</p></div><label>Application/API Token<input id='poToken' name='poToken' type='password' maxlength='30' pattern='[A-Za-z0-9]{30}' autocomplete='new-password' data-stored='");
   part += isPushoverCredential(config.pushoverAppToken) ? F("1") : F("0");
@@ -4390,6 +5130,12 @@ void handleSave() {
   const bool rippleWasEnabled = config.rippleEnabled;
   const bool updateNotificationWasEnabled = config.pushoverNotifyUpdate;
   const uint8_t previousMaxSoc = config.maxSoc;
+  if ((tariff.charging || tariff.recoveryPending)
+      && !stopTariffGridCharge("Einstellungen werden geändert")) {
+    server.send(503, "text/plain; charset=utf-8",
+                "Einstellungen nicht übernommen: Die aktive Netzladung konnte nicht sicher beendet werden.");
+    return;
+  }
   forceAllStagesOff(true);
   if (server.hasArg("clearWifi")) {
     config.wifiSsid = "";
@@ -4435,6 +5181,26 @@ void handleSave() {
   if (config.pushoverNotifyUpdate && !updateNotificationWasEnabled) {
     lastVersionCheckEpoch = 0;  // Nach dem Aktivieren direkt nach einer neuen Version suchen.
   }
+
+  config.tariffPlanningEnabled = server.hasArg("tPlan");
+  config.tariffAutomationApproved = config.tariffPlanningEnabled && server.hasArg("tAuto");
+  config.tariffProvider = static_cast<uint8_t>(boundedNumberArgument(
+      "tProvider", static_cast<uint8_t>(TariffProvider::AWATTAR),
+      static_cast<uint8_t>(TariffProvider::TIBBER),
+      static_cast<uint8_t>(TariffProvider::CUSTOM)));
+  config.tariffApiUrl = server.arg("tUrl");
+  String submittedTariffToken = server.arg("tToken");
+  submittedTariffToken.trim();
+  if (!submittedTariffToken.isEmpty()) config.tariffToken = submittedTariffToken;
+  config.tariffMaximumCents = boundedFloatArgument("tMax", 10.0f, -100.0f, 200.0f);
+  config.tariffReferenceCents = boundedFloatArgument("tRef", 28.0f, 0.0f, 200.0f);
+  config.tariffMinimumSavingCents = boundedFloatArgument("tSave", 3.0f, 0.0f, 100.0f);
+  config.tariffSurchargeCents = boundedFloatArgument("tAdd", 0.0f, -100.0f, 100.0f);
+  config.tariffVatPercent = boundedFloatArgument("tVat", 19.0f, 0.0f, 100.0f);
+  config.tariffMaximumGridSoc = static_cast<uint8_t>(boundedNumberArgument(
+      "tMaxSoc", 80, ConfigDefaults::MIN_MAX_SOC_PERCENT, 100));
+  config.tariffReservePercent = static_cast<uint8_t>(boundedNumberArgument(
+      "tReserve", 5, 0, 30));
 
   config.modbusHost = server.arg("host");
   config.modbusHost.trim();
@@ -4659,7 +5425,8 @@ void handleValuesApi() {
     item += F("{\"address\":");
     item += String(reg.address);
     item += F(",\"source\":\"");
-    item += reg.source == SourceGroup::BATTERY ? F("battery") : F("inverter");
+    item += reg.source == SourceGroup::BATTERY ? F("battery")
+        : (reg.source == SourceGroup::METER ? F("meter") : F("inverter"));
     item += F("\",\"view\":\"");
     item += reg.view == WebView::BATTERY ? F("battery") : F("inverter");
     item += F("\",\"name\":\"");
@@ -4710,10 +5477,14 @@ void handleValuesApi() {
   sendChunk(String());
 }
 
+const char TARIFF_HTML[] PROGMEM = R"HTML(
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Stromtarif · Solar Prognose Monitor</title><style>:root{--bg:#f3f5f7;--card:#fff;--text:#17212b;--muted:#64717d;--accent:#087f5b;--blue:#2673c9;--orange:#d97706;--line:#dfe4e8;--bad:#b42318}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{background:#fff;border-bottom:1px solid var(--line)}.bar{max-width:1120px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}.nav{display:flex;gap:6px;overflow-x:auto}.nav a{white-space:nowrap;color:var(--text);text-decoration:none;padding:8px 10px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}main{max-width:1120px;margin:22px auto;padding:0 18px}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}.metric b{display:block;font-size:22px;margin-top:5px}.muted{color:var(--muted)}.ok{color:var(--accent)}.bad{color:var(--bad)}.warn{background:#fff7e0;border-color:#e9b949;line-height:1.55}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.button{border:0;border-radius:9px;background:var(--accent);color:#fff;padding:10px 14px;font:inherit;font-weight:650;cursor:pointer}canvas{display:block;width:100%;height:280px}.scroll{overflow:auto}table{width:100%;border-collapse:collapse}th,td{text-align:right;padding:8px;border-bottom:1px solid var(--line);white-space:nowrap}th:first-child,td:first-child{text-align:left}.chosen{background:#e6f4ef}@media(max-width:800px){.cards{grid-template-columns:1fr 1fr}.bar{align-items:flex-start;flex-wrap:wrap}.nav{width:100%}}@media(max-width:480px){.cards{grid-template-columns:1fr}}</style></head><body><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a class="active" href="/tariff">Stromtarif</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header><main><div class="cards" id="metrics"><section class="card metric"><span class="muted">Status</span><b>Wird geladen …</b></section></div><section class="card"><div class="row"><button id="refresh" class="button">Preise und Plan neu laden</button><span id="message" class="muted"></span></div></section><section class="card warn"><b>Sicherheitsprinzip</b><br>„Planen“ führt keine Schreibzugriffe aus. Automatisches Laden benötigt die zusätzliche Freigabe unter Einstellungen. Die vom Installateur festgelegte Ladeleistung und sämtliche BMS-/Stromgrenzen werden niemals verändert. Bei fehlenden oder unplausiblen Lesewerten, veralteten Preisen, fehlendem Wetter, fehlendem Batterie-SOC oder Inselbetrieb wird nicht gestartet beziehungsweise gestoppt.</section><section class="card"><h2>Preisverlauf und ausgewählte Ladefenster</h2><canvas id="chart"></canvas></section><section class="card"><div class="scroll"><table><thead><tr><th>Beginn</th><th>Ende</th><th>Preis</th><th>Plan</th></tr></thead><tbody id="rows"></tbody></table></div></section></main><script>let state=null;const f=(n,d=1)=>Number.isFinite(Number(n))?Number(n).toFixed(d):'—',esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));function draw(){const cv=document.querySelector('#chart'),p=state?.prices||[],dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;cv.width=w*dpr;cv.height=h*dpr;const c=cv.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);if(!p.length)return;const left=45,right=10,top=20,bottom=48,pw=w-left-right,ph=h-top-bottom,min=Math.min(0,...p.map(x=>x.price)),max=Math.max(min+1,...p.map(x=>x.price));for(let i=0;i<=4;i++){const y=top+ph*i/4;c.strokeStyle='#dfe4e8';c.beginPath();c.moveTo(left,y);c.lineTo(w-right,y);c.stroke();c.fillStyle='#64717d';c.font='11px system-ui';c.fillText(f(max-(max-min)*i/4,0),2,y+4)}p.forEach((x,i)=>{const x0=left+pw*i/p.length,x1=left+pw*(i+1)/p.length,y=top+ph-(x.price-min)/(max-min)*ph;c.fillStyle=x.selected?'#087f5b':'#2673c9';c.fillRect(x0,y,Math.max(1,x1-x0-1),top+ph-y)});const ticks=w<520?4:7;for(let j=0;j<ticks;j++){const i=Math.round((p.length-1)*j/(ticks-1)),x=left+pw*i/p.length;c.fillStyle='#64717d';c.textAlign=j===0?'left':j===ticks-1?'right':'center';c.fillText(p[i].start,x,top+ph+20)}}function render(d){state=d;const s=d.status,mode=s.automation?'Automatik freigegeben':(s.planning?'Nur planen':'Aus');document.querySelector('#metrics').innerHTML=`<section class="card metric"><span class="muted">Betrieb</span><b class="${s.charging?'ok':''}">${esc(mode)}</b><small>${esc(s.text)}</small></section><section class="card metric"><span class="muted">Prognose morgen / Lücke</span><b>${f(s.predictedSoc)} % / ${f(s.missingKwh,2)} kWh</b><small>Ziel: ${s.targetSoc} %</small></section><section class="card metric"><span class="muted">Netzladeplan</span><b>${f(s.gridKwh,2)} kWh · ${f(s.costEuro,2)} €</b><small>Ziel-SOC aus Netz: ${f(s.gridTargetSoc)} %</small></section><section class="card metric"><span class="muted">Sichere Ladeleistung</span><b>${s.forcedPower||'—'} W</b><small>Maximalwert gelesen: ${s.maximumPower||'—'} W</small></section>`;document.querySelector('#message').textContent=s.fetched?'Preise geladen: '+s.fetched:'';document.querySelector('#rows').innerHTML=d.prices.map(x=>`<tr class="${x.selected?'chosen':''}"><td>${esc(x.start)}</td><td>${esc(x.end)}</td><td>${f(x.price,2)} ${esc(s.priceUnit)}</td><td>${x.selected?'Laden':'—'}</td></tr>`).join('');draw()}async function load(){try{const r=await fetch('/api/tariff',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);render(await r.json())}catch(e){document.querySelector('#message').textContent='Fehler: '+e.message}}document.querySelector('#refresh').addEventListener('click',async()=>{await fetch('/api/tariff/refresh',{method:'POST'});document.querySelector('#message').textContent='Abruf eingeplant …';setTimeout(load,1500)});load();setInterval(load,15000);addEventListener('resize',draw);</script></body></html>
+)HTML";
+
 const char FORECAST_HTML[] PROGMEM = R"HTML(
 <!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Prognose · Solar Prognose Monitor</title>
 <style>:root{--bg:#f3f5f7;--card:#fff;--text:#17212b;--muted:#64717d;--accent:#087f5b;--blue:#2673c9;--orange:#d97706;--line:#dfe4e8;--bad:#b42318}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{background:var(--card);border-bottom:1px solid var(--line)}.bar{max-width:1120px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}.nav{display:flex;gap:6px;overflow-x:auto}.nav a{white-space:nowrap;color:var(--text);text-decoration:none;padding:8px 10px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}main{max-width:1120px;margin:22px auto;padding:0 18px}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}.metric b{display:block;font-size:24px;margin-top:5px}.muted{color:var(--muted)}.ok{color:var(--accent)}.bad{color:var(--bad)}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.button{border:0;border-radius:9px;background:var(--accent);color:#fff;padding:10px 14px;font:inherit;font-weight:650;cursor:pointer}.button.secondary{background:#66727d}canvas{display:block;width:100%;height:280px}table{width:100%;border-collapse:collapse}th,td{text-align:right;padding:8px;border-bottom:1px solid var(--line);white-space:nowrap}th:first-child,td:first-child{text-align:left}.scroll{overflow:auto}h2{font-size:17px;margin:0 0 14px}@media(max-width:800px){.cards{grid-template-columns:1fr 1fr}.bar{align-items:flex-start;flex-wrap:wrap}.nav{width:100%}}@media(max-width:480px){.cards{grid-template-columns:1fr}}</style></head><body>
-<header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a class="active" href="/forecast">Prognose</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header>
+<header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a class="active" href="/forecast">Prognose</a><a href="/tariff">Stromtarif</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header>
 <main><div class="cards" id="metrics"><section class="card metric"><span class="muted">Status</span><b>Wird geladen …</b></section></div><section class="card"><div class="row"><button id="refresh" class="button">Open-Meteo neu laden</button><span id="message" class="muted">Die Betriebsart wird ausschließlich unter Einstellungen geändert.</span></div></section><section class="card"><h2>PV-Prognose und gelerntes Lastprofil</h2><canvas id="energy"></canvas></section><section class="card"><h2>SOC-Fahrplan</h2><canvas id="soc"></canvas></section><section class="card"><h2>Open-Meteo-Werte je Dachfläche</h2><div class="scroll"><table><thead id="head"></thead><tbody id="rows"></tbody></table></div></section></main>
 <script>
 let state=null;const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -4754,6 +5525,55 @@ const draw=()=>{const points=data?.points||[],cv=document.querySelector('#chart'
 const load=async()=>{try{const hours=document.querySelector('#range').value,r=await fetch('/api/history?hours='+hours,{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);data=await r.json();const last=data.points.length?' · zuletzt '+data.points[data.points.length-1].time:'',used=data.storageTotal?' · Speicher '+Math.round(data.storageUsed/1024)+'/'+Math.round(data.storageTotal/1024)+' KB':'';document.querySelector('#status').textContent=data.points.length+' Punkte · '+data.intervalMinutes+'-Minuten-Darstellung'+last+used+' · '+(data.persistent?'dauerhaft gespeichert':'nur im RAM');draw()}catch(e){document.querySelector('#status').textContent='Fehler: '+e.message}};document.querySelector('#range').addEventListener('change',load);document.querySelectorAll('[data-key]').forEach(x=>x.addEventListener('change',draw));load();setInterval(load,60000);addEventListener('resize',draw);
 </script></body></html>
 )HTML";
+
+void handleTariffPage() {
+  addNoCacheHeaders();
+  server.send_P(200, "text/html; charset=utf-8", TARIFF_HTML);
+}
+
+void handleTariffApi() {
+  addNoCacheHeaders();
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "application/json; charset=utf-8", "");
+  String out;
+  out.reserve(1000);
+  out = F("{\"status\":{\"planning\":"); out += config.tariffPlanningEnabled ? F("true") : F("false");
+  out += F(",\"automation\":"); out += config.tariffAutomationApproved ? F("true") : F("false");
+  out += F(",\"charging\":"); out += tariff.charging ? F("true") : F("false");
+  out += F(",\"provider\":\""); out += jsonEscape(tariffProviderName());
+  out += F("\",\"text\":\""); out += jsonEscape(tariff.status);
+  out += F("\",\"fetched\":\""); out += formatLocalTime(tariff.fetchedAt, true);
+  out += F("\",\"priceUnit\":\"");
+  out += config.tariffProvider == static_cast<uint8_t>(TariffProvider::OCTOPUS)
+      ? F("p/kWh") : F("ct/kWh");
+  out += F("\",\"predictedSoc\":"); out += isfinite(tariff.predictedEndSoc) ? String(tariff.predictedEndSoc, 1) : F("null");
+  out += F(",\"missingKwh\":"); out += String(tariff.missingStoredKwh, 3);
+  out += F(",\"gridKwh\":"); out += String(tariff.plannedGridKwh, 3);
+  out += F(",\"costEuro\":"); out += String(tariff.selectedCostEuro, 3);
+  out += F(",\"gridTargetSoc\":"); out += isfinite(tariff.plannedTargetSoc) ? String(tariff.plannedTargetSoc, 1) : F("null");
+  out += F(",\"targetSoc\":"); out += String(config.maxSoc);
+  out += F(",\"forcedPower\":"); out += String(tariff.forcedChargePowerWatts);
+  out += F(",\"maximumPower\":"); out += String(tariff.maximumChargePowerWatts);
+  out += F("},\"prices\":[");
+  sendChunk(out);
+  for (size_t i = 0; i < tariff.slotCount; ++i) {
+    const TariffSlot &slot = tariff.slots[i];
+    String item = i == 0 ? "" : ",";
+    item += F("{\"start\":\""); item += formatLocalTime(slot.start, true);
+    item += F("\",\"end\":\""); item += formatLocalTime(slot.end, true);
+    item += F("\",\"price\":"); item += String(slot.centsPerKwh, 4);
+    item += F(",\"selected\":"); item += slot.selected ? F("true") : F("false");
+    item += '}';
+    sendChunk(item);
+  }
+  sendChunk(F("]}"));
+  sendChunk(String());
+}
+
+void handleTariffRefresh() {
+  nextTariffFetchAt = millis();
+  server.send(202, "text/plain; charset=utf-8", "Preisabruf eingeplant");
+}
 
 void handleForecastPage() {
   addNoCacheHeaders();
@@ -5094,11 +5914,18 @@ void handleDebugStatus() {
 void handleFirmwareUpload() {
   HTTPUpload &upload = server.upload();
   if (upload.status == UPLOAD_FILE_START) {
-    firmwareUpdateInProgress = true;
     browserUpdateSuccess = false;
     browserUpdateRejected = false;
     browserUpdateForced = server.arg("force") == "1";
     browserUpdatePersistenceWarning = "";
+    if ((tariff.charging || tariff.recoveryPending)
+        && !stopTariffGridCharge("Firmwareupdate")) {
+      browserUpdateRejected = true;
+      browserUpdateMessage = "Update abgebrochen: Die aktive Netzladung konnte nicht sicher beendet werden.";
+      debugPrintln(browserUpdateMessage);
+      return;
+    }
+    firmwareUpdateInProgress = true;
     browserUpdateMessage = "Upload wird vorbereitet";
     // Auch den noch nicht abgeschlossenen Viertelstundenblock übernehmen und
     // das vollständige Lernprofil sichern, bevor die App-Partition verändert
@@ -5229,6 +6056,7 @@ void startWebServer() {
   server.on("/inverter", HTTP_GET, handleIndex);
   server.on("/battery", HTTP_GET, handleIndex);
   server.on("/forecast", HTTP_GET, handleForecastPage);
+  server.on("/tariff", HTTP_GET, handleTariffPage);
   server.on("/load-profile", HTTP_GET, handleLoadProfilePage);
   server.on("/history", HTTP_GET, handleHistoryPage);
   server.on("/settings", HTTP_GET, handleSettings);
@@ -5238,6 +6066,8 @@ void startWebServer() {
   server.on("/api/values", HTTP_GET, handleValuesApi);
   server.on("/api/forecast", HTTP_GET, handleForecastApi);
   server.on("/api/forecast/refresh", HTTP_POST, handleForecastRefresh);
+  server.on("/api/tariff", HTTP_GET, handleTariffApi);
+  server.on("/api/tariff/refresh", HTTP_POST, handleTariffRefresh);
   server.on("/api/load-profile", HTTP_GET, handleLoadProfileApi);
   server.on("/api/load-profile/reset", HTTP_POST, handleLoadProfileReset);
   server.on("/api/history", HTTP_GET, handleHistoryApi);
@@ -5283,9 +6113,17 @@ void solarPrognoseMonitorSetup() {
         ? "Warte auf Uhrzeit und Open-Meteo"
         : "Prognosesteuerung deaktiviert";
   }
+  tariff.status = tariff.recoveryPending
+      ? "Sicherheitswiederherstellung einer früheren Netzladung ausstehend"
+      : (config.tariffPlanningEnabled
+          ? "Warte auf Wetter- und Strompreisdaten"
+          : "Dynamischer Stromtarif deaktiviert");
   nextPollAt = millis();
   nextForecastFetchAt = millis();
   nextForecastControlAt = millis() + 30000UL;
+  nextTariffFetchAt = millis();
+  nextTariffControlAt = millis() + 45000UL;
+  nextTariffPlanAt = millis();
 }
 
 void solarPrognoseMonitorLoop() {
@@ -5314,6 +6152,7 @@ void solarPrognoseMonitorLoop() {
     serviceLoadProfile();
     serviceHistory();
     serviceForecastCharging();
+    serviceTariffControl();
     servicePushover();
     serviceVersionCheck();
   }
