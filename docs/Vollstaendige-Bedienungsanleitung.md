@@ -96,7 +96,7 @@ Die Betriebsart wird hier nur angezeigt. Umschalten ist ausschließlich unter **
 |---|---|
 | Steuerung | Zeigt **Prognose** oder **Bypass** sowie den aktuellen Regelstatus, etwa Wetterabruf, fehlenden SOC oder erfolgreichen Schreibvorgang. |
 | Absoluter Batteriestand / freigegebener SOC | Links steht der absolute Batteriestand 10743, rechts der tatsächlich zurückgelesene Max-SOC des Wechselrichters. Darunter stehen Transportweg, zeitbasiertes Fahrplan-Soll und Min-SOC. |
-| PV / gelernte Last | Erwartete PV-Energie und erwarteter Hausverbrauch im betrachteten Zeitraum. „Für Batterie“ zeigt die nach Last, Wirkungsgraden und Sicherheitsabschlag verfügbare Energie. |
+| PV / gelernte Last | Erwartete PV-Energie und erwarteter Hausverbrauch im betrachteten Zeitraum. Darunter stehen erwartete Ladung, erwartete Entladung und die daraus gebildete Netto-Batterieenergie. |
 | Prognoseplan / min. Batteriestand zum Erreichen des Max-SOC | Zwei unabhängig berechnete SOC-Untergrenzen. Der zweite Wert zeigt, wie hoch der Batteriestand jetzt mindestens sein müsste, damit die verbleibende prognostizierte Energie noch zum eingestellten Max-SOC führt. Der höhere Wert bestimmt die nächste Freigabe. Angezeigt werden außerdem Ladeende, normale Regelwrites samt Tageslimit und Sonderwrites. |
 
 ### Schaltfläche und Diagramme
@@ -104,9 +104,9 @@ Die Betriebsart wird hier nur angezeigt. Umschalten ist ausschließlich unter **
 | Element | Bedeutung |
 |---|---|
 | Open-Meteo neu laden | Plant sofort einen neuen Wetterabruf ein. Die Antwort erfolgt im Hintergrund; die Statusmeldung aktualisiert sich danach. |
-| PV-Prognose und gelerntes Lastprofil | Zeigt in 15-Minuten-Schritten PV-Leistung, den jeweils passenden gelernten Lastprofilwert und daraus anrechenbare Batterieenergie. Datum und Uhrzeit stehen auf der X-Achse. |
+| PV-Prognose und gelerntes Lastprofil | Zeigt in 15-Minuten-Schritten PV-Leistung, den jeweils passenden gelernten Lastprofilwert und die daraus erwartete positive Lade- oder negative Entladeenergie. Datum und Uhrzeit stehen auf der X-Achse. |
 | SOC-Fahrplan | Zeigt Prognoseplan, mindestens erforderlichen Batteriestand und den daraus gerasterten Freigabe-Zeitplan. Senkrechte Linien markieren den aktuellen Zeitpunkt und das geplante Ladeende. |
-| Open-Meteo-Werte je Dachfläche | Tabelle mit Datum/Uhrzeit, Gesamt-PV, erwarteter Last, Batterieenergie, beiden SOC-Berechnungen, gerasterter Freigabe und der Einstrahlung auf jede aktivierte Dachfläche. Damit ist nachvollziehbar, welcher Wert zu welcher Zeit gelten soll. |
+| Open-Meteo-Werte je Dachfläche | Tabelle mit Datum/Uhrzeit, Gesamt-PV, erwarteter Last, Batterieenergie mit Vorzeichen, beiden SOC-Berechnungen, gerasterter Freigabe und der Einstrahlung auf jede aktivierte Dachfläche. Positiv bedeutet erwartete Ladung, negativ erwartete Entladung. |
 
 ## 6. Tab „Lastprofil“
 
@@ -180,6 +180,7 @@ Der Verlauf schreibt alle fünf Minuten einen kompakten Messpunkt in eine Tagesd
 | Prognose-Sicherheitsfaktor | Energiereserve für Prognosefehler und ungeplante Verbraucher. Bei 80 % erreicht der Fahrplan sein Ziel bereits nach rund 80 % der erwarteten nutzbaren Energie; die übrigen 20 % bleiben als Reserve. Kleiner bedeutet vorsichtiger und frühere Freigabe. |
 | PV-Systemwirkungsgrad | Pauschaler Anlagenfaktor für Temperatur, Kabel, Wechselrichter, Verschmutzung, Mismatch und kleinere Verschattung. Nicht mit dem Modulwirkungsgrad verwechseln. Standard: 95 %. |
 | Batterie-Ladewirkungsgrad | Anteil des PV-Überschusses, der als im Akku angekommen gerechnet wird. Standard: 95 %. |
+| Batterie-Entladewirkungsgrad | Berücksichtigt Speicherverluste, wenn eine wiederkehrende Last größer als die erwartete PV-Leistung ist. Standard: 95 %. |
 | SOC-Schrittweite | Raster der Max-SOC-Freigaben, ausgehend von 50 %. Standard sind 10 %, um die Zahl der persistenten Wechselrichter-Schreibzugriffe zu reduzieren. Bei 3 % entstehen beispielsweise 50, 53, 56 … 100 %. Werte unter 3 % erhöhen die Schreibzahl besonders stark. |
 | Mindestabstand Schreibzugriffe | Mindestzeit zwischen normalen prognosebedingten Änderungen. |
 | Gewünschte Schreibobergrenze pro Tag | Tagesgrenze normaler Regelwrites. Reicht sie nicht aus, um den Bereich von 50 % bis Max-SOC in der gewählten Schrittweite abzudecken, wird sie automatisch auf die notwendige Zahl angehoben. Bypass-, Sicherheits- und abschließende Tagesfreigaben werden separat gezählt und bleiben möglich. Standard: 20. |
@@ -340,16 +341,26 @@ PV-Leistung Fläche [kW]
 PV-Leistung gesamt [kW]
   = Summe aller aktivierten Dachflächen
 
-PV-Überschuss [kW]
-  = max(0, PV-Leistung gesamt − erwartete Hauslast)
+Leistungsbilanz [kW]
+  = PV-Leistung gesamt − erwartete Hauslast
 
-Batterieenergie der Viertelstunde [kWh]
-  = PV-Überschuss dieser Viertelstunde [kW] × 0,25 h
+bei positiver Leistungsbilanz:
+Ladeenergie der Viertelstunde [kWh]
+  = Leistungsbilanz [kW] × 0,25 h
     × Batterie-Ladewirkungsgrad / 100
     × Prognose-Sicherheitsfaktor / 100
+
+bei negativer Leistungsbilanz:
+Entladeenergie der Viertelstunde [kWh]
+  = Betrag der Leistungsbilanz [kW] × 0,25 h
+    ÷ (Batterie-Entladewirkungsgrad / 100)
+    ÷ (Prognose-Sicherheitsfaktor / 100)
+
+Netto-Batterieenergie
+  = Ladeenergie − Entladeenergie
 ```
 
-Für `:00`, `:15`, `:30` und `:45` wird jeweils der dazugehörige Lastprofilwert eingesetzt. Die Energie der vollständigen Wetterstunde ist die Summe dieser vier Ergebnisse. Der betrachtete Zeitraum reicht vom Abrufzeitpunkt der aktuellen Prognose bis `Sonnenuntergang − Fertig-vor-Sonnenuntergang`. Angebrochene erste, letzte und laufende Viertelstunden werden nur mit ihrem tatsächlichen Zeitanteil berücksichtigt. Die SOC-Regelung bewertet den Plan an den Viertelstundengrenzen neu und prüft das konfigurierte Ladeende zusätzlich exakt. Schlägt eine Modbusabfrage fehl, wird bereits nach fünf Minuten erneut versucht.
+Für `:00`, `:15`, `:30` und `:45` wird jeweils der dazugehörige Lastprofilwert eingesetzt. Die Energie der vollständigen Wetterstunde ist die Summe dieser vier Ergebnisse. Übersteigt die gelernte Last die PV-Leistung, wird die resultierende Versorgungslücke als erwartete Batterieentladung geführt. Der rückwärts berechnete Mindest-SOC kann dadurch bereits vor einem regelmäßig auftretenden Großverbraucher steigen. Dabei wird konservativ angenommen, dass die Batterie die Lücke versorgt; ob real Batterie oder Netz einspringt, bestimmen Min-SOC, Betriebsart und Wechselrichtereinstellungen. Der betrachtete Zeitraum reicht vom Abrufzeitpunkt der aktuellen Prognose bis `Sonnenuntergang − Fertig-vor-Sonnenuntergang`. Angebrochene erste, letzte und laufende Viertelstunden werden nur mit ihrem tatsächlichen Zeitanteil berücksichtigt. Die SOC-Regelung bewertet den Plan an den Viertelstundengrenzen neu und prüft das konfigurierte Ladeende zusätzlich exakt. Schlägt eine Modbusabfrage fehl, wird bereits nach fünf Minuten erneut versucht.
 
 ### 11.3 SOC-Fahrplan
 
@@ -366,7 +377,7 @@ Plan-SOC
 
 Mindest-SOC zum Erreichen des Max-SOC
   = Max-SOC
-    − restliche Batterieenergie [kWh]
+    − restliche Netto-Batterieenergie [kWh]
       / Batteriekapazität [kWh] × 100
 
 vorläufiger Soll-SOC
@@ -421,7 +432,7 @@ erwartete Last
     + gelernte Ereignisleistung × Ereigniswahrscheinlichkeit / 100
 ```
 
-Liegt die Beobachtung deutlich über der Grundlast und über der eingestellten Großlastschwelle, wird der Mehrverbrauch als Ereignis gelernt. Dadurch kann etwa eine regelmäßig nachmittags stattfindende Autoladung nach mehreren passenden Tagen mit ihrer bisherigen Wahrscheinlichkeit berücksichtigt werden.
+Liegt die Beobachtung deutlich über der Grundlast und über der eingestellten Großlastschwelle, wird der Mehrverbrauch als Ereignis gelernt. Dadurch kann etwa eine regelmäßig nachmittags stattfindende Autoladung nach mehreren passenden Tagen mit ihrer bisherigen Wahrscheinlichkeit berücksichtigt werden. Überschreitet diese erwartete Last später die prognostizierte PV-Leistung, fließt die Differenz als negative Batterieenergie in den Fahrplan ein. Spontane, zuvor nicht gelernte Verbraucher können dagegen nicht vorausgesagt werden.
 
 ### 11.5 Kumulative Überschuss-Stufen
 

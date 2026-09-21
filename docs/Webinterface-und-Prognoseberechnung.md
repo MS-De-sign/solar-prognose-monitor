@@ -12,11 +12,19 @@ Open-Meteo liefert für jede aktivierte Dachfläche stündliche Werte der Einstr
 PV-Leistung = Summe je Dachfläche aus
               (installierte kWp × GTI / 1000 × PV-Systemwirkungsgrad)
 
-PV-Überschuss = max(0, PV-Leistung − erwartete Hauslast)
+Leistungsbilanz = PV-Leistung − erwartete Hauslast
 
-Energie für Batterie = PV-Überschuss × 0,25 Stunden
-                       × Batterie-Ladewirkungsgrad
-                       × Prognose-Sicherheitsfaktor
+bei positiver Bilanz:
+  Ladeenergie = Leistungsbilanz × 0,25 Stunden
+                × Batterie-Ladewirkungsgrad
+                × Prognose-Sicherheitsfaktor
+
+bei negativer Bilanz:
+  Entladeenergie = Betrag der Leistungsbilanz × 0,25 Stunden
+                   ÷ (Batterie-Entladewirkungsgrad / 100)
+                   ÷ (Prognose-Sicherheitsfaktor / 100)
+
+Netto-Batterieenergie = Ladeenergie − Entladeenergie
 ```
 
 Die Energie einer Wetterstunde ist die Summe ihrer vier einzeln berechneten Viertelstunden. Dadurch wird zum Beispiel eine um 14:30 Uhr erwartete Autoladung auch dann berücksichtigt, wenn die Grundlast um 14:00 Uhr noch niedrig war. Berücksichtigt wird der Zeitraum vom Abruf der aktuellen Prognose bis:
@@ -36,6 +44,7 @@ Angenommen:
 - PV-Systemwirkungsgrad: 95 %,
 - erwartete Hauslast: 1,0 kW,
 - Batterie-Ladewirkungsgrad: 95 %,
+- Batterie-Entladewirkungsgrad: 95 %,
 - Prognose-Sicherheitsfaktor: 80 %.
 
 Dann ergibt sich:
@@ -49,6 +58,10 @@ sicher angerechnet   = 1,568 × 0,80             = 1,254 kWh
 ```
 
 Für diese Viertelstunde plant die Software also mit rund **1,25 kWh nutzbarer Batterieenergie**. Sind alle vier Viertelstunden identisch, ergeben sich für die vollständige Stunde rund 5,02 kWh. Wechselt die gelernte Hauslast innerhalb der Stunde, wird jeder Abschnitt separat berechnet. Eine Begrenzung durch die maximale Wechselrichter- oder Batterieladeleistung ist in dieser Prognoserechnung derzeit nicht enthalten.
+
+Erwartet die Lernkurve dagegen 8,0 kW Last bei 5,0 kW PV-Leistung, beträgt das Defizit 3,0 kW. Mit 95 % Entladewirkungsgrad und 80 % Sicherheit werden für diese Viertelstunde konservativ rund `3,0 × 0,25 ÷ 0,95 ÷ 0,80 = 0,99 kWh` erwartete Batterieentladung angesetzt. Dieser negative Wert erhöht den vor dem Verbraucher erforderlichen SOC.
+
+Die Prognose nimmt dabei konservativ an, dass der Batteriespeicher eine negative Leistungsbilanz versorgt. Ob tatsächlich der Speicher entlädt oder Energie aus dem Netz bezogen wird, hängt weiterhin von Betriebsart, Min-SOC, Wechselrichtereinstellungen und dem realen Anlagenzustand ab. Die Berechnung erzwingt keine Entladung.
 
 ## 2. Bedeutung der drei Faktoren
 
@@ -78,9 +91,17 @@ Dieser Wert beschreibt, welcher Anteil des nach Abzug der Hauslast verbleibenden
 - 95 % bedeutet: Von rechnerisch 10 kWh Überschuss werden 9,5 kWh als speicherbar angenommen,
 - kleinerer Wert: weniger erwarteter SOC-Zuwachs und vorsichtigere Freigabe.
 
+### Batterie-Entladewirkungsgrad
+
+Dieser Wert beschreibt, wie viel gespeicherte Batterieenergie benötigt wird, um eine erwartete Versorgungslücke am Hausanschluss abzudecken. Bei 95 % werden für 0,95 kWh abgegebene Energie ungefähr 1,0 kWh Speicherenergie angesetzt.
+
+- kleinerer Wert: größere angenommene Batterieentladung und frühere Freigabe vor wiederkehrenden Großlasten,
+- größerer Wert: geringere angenommene Entladeverluste,
+- Standardwert: **95 %**.
+
 Startempfehlung: **95 %**. Dieser Wert sollte nicht benutzt werden, um eine schlechte Wetterprognose auszugleichen; dafür ist der Sicherheitsfaktor gedacht.
 
-Die Faktoren werden multipliziert, nicht addiert. Mit 95 % Ladewirkungsgrad und 80 % Sicherheit werden nach Abzug der Hauslast insgesamt `0,95 × 0,80 = 0,76`, also 76 %, als sicher speicherbar angerechnet. Der PV-Systemwirkungsgrad wird bereits davor auf die theoretische PV-Leistung angewendet.
+Die Faktoren werden nicht addiert. Bei positiver Bilanz werden mit 95 % Ladewirkungsgrad und 80 % Sicherheit `0,95 × 0,80 = 0,76`, also 76 %, als sicher speicherbar angerechnet. Bei negativer Bilanz wird durch Entladewirkungsgrad und Sicherheitsfaktor geteilt. Dadurch plant ein kleinerer Sicherheitsfaktor nicht nur weniger erwartete Ladung ein, sondern reserviert auch mehr Energie für eine bekannte Versorgungslücke. Der PV-Systemwirkungsgrad wird bereits davor auf die theoretische PV-Leistung angewendet.
 
 ## 3. Vom Energieplan zum Max-SOC
 
@@ -100,10 +121,11 @@ Plan-SOC = Start-SOC
            + (Max-SOC − Start-SOC) × begrenzter Planfortschritt
 
 Mindest-SOC zum Erreichen des Max-SOC = Max-SOC
-                                        − restliche Batterieenergie / Batteriekapazität × 100
+                                        − restliche Netto-Batterieenergie
+                                          / Batteriekapazität × 100
 ```
 
-Der berechnete Mindest-SOC wird anschließend auf **0 % bis Max-SOC** begrenzt. Ein Wert von 0 % bedeutet, dass die verbleibende prognostizierte Energie selbst bei leerem Akku noch zum Max-SOC reichen würde.
+Der berechnete Mindest-SOC wird anschließend auf **0 % bis Max-SOC** begrenzt. Ein Wert von 0 % bedeutet, dass die verbleibende prognostizierte Nettoenergie selbst bei leerem Akku noch zum Max-SOC reichen würde. Eine erwartete Entladung reduziert die restliche Nettoenergie und kann den Mindest-SOC schon vor dem bekannten Verbraucher anheben. Ist die verbleibende Bilanz negativ, wird der Max-SOC vorsorglich vollständig freigegeben.
 
 Als Sollwert nimmt die Regelung den höheren der beiden Werte. Zusätzlich gilt:
 
@@ -193,6 +215,7 @@ RX, TX, DE/RE, aktive Stufen und Rundsteuer-Eingänge dürfen keinen GPIO doppel
 | Prognose-Sicherheitsfaktor | Bestimmt die Energiereserve; 80 % plant das Ziel nach rund 80 % der erwarteten nutzbaren Energie. |
 | PV-Systemwirkungsgrad | Pauschaler Minderungsfaktor zwischen Einstrahlung und realer PV-Leistung. |
 | Batterie-Ladewirkungsgrad | Anteil des Überschusses, der als im Akku angekommen gilt. |
+| Batterie-Entladewirkungsgrad | Speicherenergie, die für eine erwartete negative Leistungsbilanz benötigt wird. |
 | SOC-Schrittweite | Fahrplanraster ausgehend von 50 %. Standard sind 10 %, um die Zahl der persistenten Wechselrichter-Schreibzugriffe zu reduzieren. Werte unter 3 % bleiben auswählbar, verursachen aber besonders viele Schreibzugriffe. Verpasste Stufen werden übersprungen. |
 | Mindestabstand Schreibzugriffe | Mindestzeit zwischen zwei prognosebedingten Änderungen. |
 | Gewünschte Schreibobergrenze pro Tag | Tageslimit für normale Änderungen. Ist für 50 % bis Max-SOC rechnerisch eine höhere Zahl erforderlich, wird die wirksame Grenze automatisch angehoben. Standard: 20. Einmalige Sicherheits-, Bypass- und abschließende Tagesfreigaben werden getrennt gezählt. |
@@ -266,10 +289,10 @@ Für die Regelung wird ausschließlich der direkte SOC aus Adresse 10743 verwend
 
 ## 8. Hinweise zur Abstimmung
 
-Für die erste Inbetriebnahme sind 95 % PV-Systemwirkungsgrad, 95 % Batterie-Ladewirkungsgrad und 80 % Sicherheitsfaktor die voreingestellten Ausgangswerte.
+Für die erste Inbetriebnahme sind 95 % PV-Systemwirkungsgrad, 95 % Batterie-Ladewirkungsgrad, 95 % Batterie-Entladewirkungsgrad und 80 % Sicherheitsfaktor die voreingestellten Ausgangswerte.
 
 1. Zuerst an klaren Tagen den PV-Systemwirkungsgrad anhand vorhergesagter und realer Erzeugung abstimmen.
-2. Den Batterie-Ladewirkungsgrad normalerweise im Bereich 90–95 % belassen.
+2. Batterie-Lade- und Entladewirkungsgrad normalerweise im Bereich 90–95 % belassen.
 3. Danach den Sicherheitsfaktor an die örtliche Prognosequalität anpassen. Wird der Akku zu oft zu spät voll, den Wert reduzieren. Wird er regelmäßig sehr früh voll, kann er vorsichtig erhöht werden.
 
 Die drei Faktoren sollten nicht gleichzeitig stark verändert werden, weil sonst nicht mehr erkennbar ist, welche Korrektur gewirkt hat.

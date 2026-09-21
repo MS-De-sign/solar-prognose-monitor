@@ -7,6 +7,9 @@
 - zerlegt jede stündliche Open-Meteo-Prognose intern in vier Viertelstunden
 - verrechnet in jeder Viertelstunde den tatsächlich zu diesem Zeitpunkt gelernten Lastprofilwert statt nur den Wert am Stundenanfang
 - berücksichtigt dadurch Lastsprünge um `:15`, `:30` und `:45` vollständig in PV-, Last-, Batterieenergie- und SOC-Fahrplan
+- behandelt wiederkehrende Lasten oberhalb der erwarteten PV-Leistung als negative Batterieenergie und hebt den rückwärts gerechneten Mindest-SOC bei Bedarf bereits vor dem Verbraucher an
+- ergänzt einen einstellbaren Batterie-Entladewirkungsgrad mit 95 % als abwärtskompatiblem Standardwert
+- zeigt erwartete Ladung, erwartete Entladung und die Netto-Batterieenergie getrennt sowie negative Viertelstundenwerte in Diagramm und Tabelle
 - zeigt Prognosekurven und Wertetabelle künftig in 15-Minuten-Auflösung
 - richtet die SOC-Regelprüfung an den Viertelstundengrenzen aus und prüft zusätzlich exakt zum konfigurierten Ladeende; Modbusfehler werden weiterhin nach fünf Minuten erneut versucht
 

@@ -12,7 +12,7 @@ Dafür kombiniert die Software mehrere Informationen:
 - die noch erwartete PV-Energie bis zum geplanten Ladeende,
 - sowie ein lokal erlerntes Verbrauchsprofil.
 
-Der Hausverbrauch wird für jeden Wochentag in 15-Minuten-Blöcken gelernt. Wiederkehrende Lasten – beispielsweise ein regelmäßig am Nachmittag geladenes Elektroauto – fließen dadurch zunehmend in die Planung ein. Jede stündliche Open-Meteo-Prognose wird intern in vier Viertelstunden aufgeteilt und mit den vier jeweils passenden Lastprofilwerten verrechnet. Berechnung, Lernprofil und Messverlauf bleiben auf dem ESP32; lediglich die Wettervorhersage wird von Open-Meteo abgerufen. Ein eigener Cloud- oder Herstellerserver ist nicht erforderlich.
+Der Hausverbrauch wird für jeden Wochentag in 15-Minuten-Blöcken gelernt. Wiederkehrende Lasten – beispielsweise ein regelmäßig am Nachmittag geladenes Elektroauto – fließen dadurch zunehmend in die Planung ein. Jede stündliche Open-Meteo-Prognose wird intern in vier Viertelstunden aufgeteilt und mit den vier jeweils passenden Lastprofilwerten verrechnet. Übersteigt eine erwartete Last die PV-Leistung, wird die Differenz als voraussichtliche Batterieentladung berücksichtigt. Der rückwärts gerechnete Mindest-SOC kann dadurch bereits vor einem bekannten Großverbraucher ansteigen. Berechnung, Lernprofil und Messverlauf bleiben auf dem ESP32; lediglich die Wettervorhersage wird von Open-Meteo abgerufen. Ein eigener Cloud- oder Herstellerserver ist nicht erforderlich.
 
 Die Steuerung gibt den zulässigen Ladezielwert schrittweise frei. Bei einer unerwarteten Wolkenphase wartet sie nicht auf eine verpasste Zwischenstufe, sondern wechselt auf den zur aktuellen Uhrzeit vorgesehenen Wert. Zusätzlich prüft sie, welcher Batteriestand mindestens freigegeben werden muss, damit das Tagesziel mit der noch erwarteten Energie erreichbar bleibt. Sicherheitsreserve, gewünschtes Ladeende und Schrittweite lassen sich einstellen. Da Wetter- und Verbrauchsprognosen nie vollkommen exakt sind, ersetzt das System keine Anlagenüberwachung und sollte bei der ersten Inbetriebnahme kontrolliert werden.
 
@@ -27,7 +27,7 @@ Aktuelle Version: **1.2.0**
 - getrennte Webansichten für Wechselrichter und Batterie
 - eigener WLAN-Access-Point mit dauerhaft gespeicherten WLAN-Einstellungen
 - Open-Meteo-Prognose für bis zu vier unterschiedlich ausgerichtete Dachflächen
-- lokales, je Wochentag erlerntes 15-Minuten-Lastprofil, vollständige Viertelstunden-Verrechnung in der Ladeprognose sowie stündliche und updatefeste Speicherung
+- lokales, je Wochentag erlerntes 15-Minuten-Lastprofil mit erwarteter Ladung und Entladung, vollständige Viertelstunden-Verrechnung in der Ladeprognose sowie stündliche und updatefeste Speicherung
 - fünf kumulative Überschuss-Stufen über GPIO oder HTTP-API
 - wahlweise drei oder vier frei belegbare Eingänge für einen Rundsteuerempfänger mit automatischer Einspeisebegrenzung
 - 3-Kontakt-Modus mit 100 % bei ruhenden Eingängen oder 4-Kontakt-Modus mit eigenem 100-%-Signal

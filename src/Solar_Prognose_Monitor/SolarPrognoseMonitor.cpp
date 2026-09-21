@@ -490,6 +490,7 @@ struct AppConfig {
   uint8_t forecastSafetyPercent;
   uint8_t pvSystemEfficiencyPercent;
   uint8_t batteryChargeEfficiencyPercent;
+  uint8_t batteryDischargeEfficiencyPercent;
   uint8_t socStepPercent;
   uint16_t minimumWriteMinutes;
   uint8_t maximumWritesPerDay;
@@ -583,6 +584,8 @@ struct ForecastState {
   float requestedSoc;
   float totalPvKwh;
   float totalLearnedLoadKwh;
+  float totalBatteryChargeKwh;
+  float totalBatteryDischargeKwh;
   float totalBatteryEnergyKwh;
   ForecastPoint points[FORECAST_POINT_COUNT];
 };
@@ -1399,6 +1402,7 @@ void setDefaultForecastConfig() {
   config.forecastSafetyPercent = 80;
   config.pvSystemEfficiencyPercent = 95;
   config.batteryChargeEfficiencyPercent = 95;
+  config.batteryDischargeEfficiencyPercent = 95;
   config.socStepPercent = 10;
   config.minimumWriteMinutes = 20;
   config.maximumWritesPerDay = 20;
@@ -1433,6 +1437,7 @@ void sanitizeForecastConfig() {
   config.forecastSafetyPercent = constrain(config.forecastSafetyPercent, 40, 100);
   config.pvSystemEfficiencyPercent = constrain(config.pvSystemEfficiencyPercent, 40, 100);
   config.batteryChargeEfficiencyPercent = constrain(config.batteryChargeEfficiencyPercent, 50, 100);
+  config.batteryDischargeEfficiencyPercent = constrain(config.batteryDischargeEfficiencyPercent, 50, 100);
   config.socStepPercent = constrain(config.socStepPercent, 1, 20);
   config.minimumWriteMinutes = constrain(config.minimumWriteMinutes, 5, 240);
   config.maximumWritesPerDay = constrain(config.maximumWritesPerDay, 1, 48);
@@ -1585,6 +1590,8 @@ void loadConfig() {
   config.forecastSafetyPercent = preferences.getUChar("fcsafe", config.forecastSafetyPercent);
   config.pvSystemEfficiencyPercent = preferences.getUChar("pveff", config.pvSystemEfficiencyPercent);
   config.batteryChargeEfficiencyPercent = preferences.getUChar("bateff", config.batteryChargeEfficiencyPercent);
+  config.batteryDischargeEfficiencyPercent = preferences.getUChar(
+      "batdeff", config.batteryDischargeEfficiencyPercent);
   config.socStepPercent = preferences.getUChar("socstep", config.socStepPercent);
   config.minimumWriteMinutes = preferences.getUShort("writemin", config.minimumWriteMinutes);
   config.maximumWritesPerDay = preferences.getUChar("writemax", config.maximumWritesPerDay);
@@ -1729,6 +1736,7 @@ void saveConfig() {
   preferences.putUChar("fcsafe", config.forecastSafetyPercent);
   preferences.putUChar("pveff", config.pvSystemEfficiencyPercent);
   preferences.putUChar("bateff", config.batteryChargeEfficiencyPercent);
+  preferences.putUChar("batdeff", config.batteryDischargeEfficiencyPercent);
   preferences.putUChar("socstep", config.socStepPercent);
   preferences.putUShort("writemin", config.minimumWriteMinutes);
   preferences.putUChar("writemax", config.maximumWritesPerDay);
@@ -3635,8 +3643,13 @@ void calculateForecastPlan() {
   if (forecast.finishAt <= forecast.sunrise) forecast.finishAt = forecast.sunset;
   forecast.totalPvKwh = 0.0f;
   forecast.totalLearnedLoadKwh = 0.0f;
+  forecast.totalBatteryChargeKwh = 0.0f;
+  forecast.totalBatteryDischargeKwh = 0.0f;
   forecast.totalBatteryEnergyKwh = 0.0f;
   const float sliceHours = ConfigDefaults::FORECAST_SLICE_SECONDS / 3600.0f;
+  const float chargeEfficiency = config.batteryChargeEfficiencyPercent / 100.0f;
+  const float dischargeEfficiency = config.batteryDischargeEfficiencyPercent / 100.0f;
+  const float safetyFraction = max(0.01f, config.forecastSafetyPercent / 100.0f);
 
   for (size_t i = 0; i < forecast.pointCount; ++i) {
     ForecastPoint &point = forecast.points[i];
@@ -3647,9 +3660,13 @@ void calculateForecastPlan() {
                   * (config.pvSystemEfficiencyPercent / 100.0f);
     }
     point.learnedLoadKw = expectedLoadWatts(point.epoch) / 1000.0f;
-    const float batteryPowerKw = max(0.0f, point.pvKw - point.learnedLoadKw)
-                               * (config.batteryChargeEfficiencyPercent / 100.0f)
-                               * (config.forecastSafetyPercent / 100.0f);
+    const float powerBalanceKw = point.pvKw - point.learnedLoadKw;
+    // Positive Bilanz ist konservativ anrechenbare Ladung. Bei negativer
+    // Bilanz wird die aus dem Speicher benoetigte Energie inklusive
+    // Entladeverlust und Sicherheitsreserve als negativer Wert gefuehrt.
+    const float batteryPowerKw = powerBalanceKw >= 0.0f
+        ? powerBalanceKw * chargeEfficiency * safetyFraction
+        : powerBalanceKw / dischargeEfficiency / safetyFraction;
     point.batteryEnergyKwh = batteryPowerKw * sliceHours;
     const float includedHours = overlappingHours(
         point.epoch, point.epoch + ConfigDefaults::FORECAST_SLICE_SECONDS,
@@ -3657,56 +3674,68 @@ void calculateForecastPlan() {
     if (includedHours > 0.0f) {
       forecast.totalPvKwh += point.pvKw * includedHours;
       forecast.totalLearnedLoadKwh += point.learnedLoadKw * includedHours;
-      forecast.totalBatteryEnergyKwh += batteryPowerKw * includedHours;
+      const float includedBatteryEnergy = batteryPowerKw * includedHours;
+      if (includedBatteryEnergy >= 0.0f) {
+        forecast.totalBatteryChargeKwh += includedBatteryEnergy;
+      } else {
+        forecast.totalBatteryDischargeKwh -= includedBatteryEnergy;
+      }
+      forecast.totalBatteryEnergyKwh += includedBatteryEnergy;
     }
   }
 
-  const float safetyFraction = max(0.01f, config.forecastSafetyPercent / 100.0f);
-  // Die Punktenergien enthalten bereits den Sicherheitsabschlag. Durch die
-  // zusaetzliche Division des Gesamtwerts durch denselben Faktor entspricht
-  // der Quotient wieder: Rohenergie bisher / (Rohenergie gesamt * Sicherheit).
+  // Die positiven Punktenergien enthalten bereits den Sicherheitsabschlag.
+  // Durch die zusaetzliche Multiplikation des Gesamtwerts mit demselben
+  // Faktor entspricht der Quotient wieder: Rohenergie bisher /
+  // (Rohenergie gesamt * Sicherheit).
   // Bei 80 % erreicht der Fahrplan sein Ziel damit nach rund 80 % der
   // erwarteten nutzbaren Tagesenergie; der Rest bleibt als Wetterreserve.
-  const float scheduleEnergyKwh = forecast.totalBatteryEnergyKwh * safetyFraction;
-  auto calculateSocAtEnergy = [&](float cumulativeEnergyKwh,
+  const float scheduleEnergyKwh = forecast.totalBatteryChargeKwh * safetyFraction;
+  auto calculateSocAtEnergy = [&](float cumulativeChargeKwh, float cumulativeNetKwh,
                                   float &plannedSoc, float &reachableSoc) {
     const float ratio = scheduleEnergyKwh > 0.01f
-        ? cumulativeEnergyKwh / scheduleEnergyKwh
+        ? cumulativeChargeKwh / scheduleEnergyKwh
         : 1.0f;
     plannedSoc = forecast.startSoc
         + (config.maxSoc - forecast.startSoc) * constrain(ratio, 0.0f, 1.0f);
-    const float remainingSafeEnergy = max(0.0f,
-        forecast.totalBatteryEnergyKwh - cumulativeEnergyKwh);
-    reachableSoc = constrain(config.maxSoc - remainingSafeEnergy / capacityKwh * 100.0f,
+    const float remainingNetEnergy = forecast.totalBatteryEnergyKwh - cumulativeNetKwh;
+    reachableSoc = constrain(config.maxSoc - remainingNetEnergy / capacityKwh * 100.0f,
                              0.0f, static_cast<float>(config.maxSoc));
     plannedSoc = constrain(max(plannedSoc, reachableSoc),
                            static_cast<float>(ConfigDefaults::MIN_MAX_SOC_PERCENT),
                            static_cast<float>(config.maxSoc));
   };
 
-  float cumulative = 0.0f;
+  float cumulativeCharge = 0.0f;
+  float cumulativeNet = 0.0f;
   for (size_t i = 0; i < forecast.pointCount; ++i) {
     ForecastPoint &point = forecast.points[i];
     // Der Kurvenwert gehoert zum auf der X-Achse gezeigten Viertelstundenbeginn.
     // Deshalb wird erst der SOC berechnet und danach die Energie dieser
     // Viertelstunde zum naechsten Punkt addiert.
-    calculateSocAtEnergy(cumulative, point.plannedSoc, point.reachableSoc);
+    calculateSocAtEnergy(cumulativeCharge, cumulativeNet, point.plannedSoc, point.reachableSoc);
     const float includedHours = overlappingHours(
         point.epoch, point.epoch + ConfigDefaults::FORECAST_SLICE_SECONDS,
         planStart, forecast.finishAt);
-    cumulative += point.batteryEnergyKwh * (includedHours / sliceHours);
+    const float includedEnergy = point.batteryEnergyKwh * (includedHours / sliceHours);
+    cumulativeNet += includedEnergy;
+    if (includedEnergy > 0.0f) cumulativeCharge += includedEnergy;
   }
 
-  float cumulativeUntilNow = 0.0f;
+  float cumulativeChargeUntilNow = 0.0f;
+  float cumulativeNetUntilNow = 0.0f;
   const time_t progressEnd = now < forecast.finishAt ? now : forecast.finishAt;
   for (size_t i = 0; i < forecast.pointCount; ++i) {
     const ForecastPoint &point = forecast.points[i];
     const float includedHours = overlappingHours(
         point.epoch, point.epoch + ConfigDefaults::FORECAST_SLICE_SECONDS,
         planStart, progressEnd);
-    cumulativeUntilNow += point.batteryEnergyKwh * (includedHours / sliceHours);
+    const float includedEnergy = point.batteryEnergyKwh * (includedHours / sliceHours);
+    cumulativeNetUntilNow += includedEnergy;
+    if (includedEnergy > 0.0f) cumulativeChargeUntilNow += includedEnergy;
   }
-  calculateSocAtEnergy(cumulativeUntilNow, forecast.plannedSoc, forecast.reachableSoc);
+  calculateSocAtEnergy(cumulativeChargeUntilNow, cumulativeNetUntilNow,
+                       forecast.plannedSoc, forecast.reachableSoc);
 }
 
 bool fetchOpenMeteoForecast() {
@@ -3753,8 +3782,10 @@ bool fetchOpenMeteoForecast() {
     forecast.status = "Wetter aktuell; absoluter Batteriestand 10743 fehlt";
   }
   nextForecastFetchAt = millis() + static_cast<uint32_t>(config.forecastFetchHours) * 60UL * 60UL * 1000UL;
-  debugPrintf("Open-Meteo: %u Viertelstunden, PV %.1f kWh, Last %.1f kWh, Akku verfügbar %.1f kWh.\n",
-              forecast.pointCount, forecast.totalPvKwh, forecast.totalLearnedLoadKwh, forecast.totalBatteryEnergyKwh);
+  debugPrintf("Open-Meteo: %u Viertelstunden, PV %.1f kWh, Last %.1f kWh, Akku netto %.1f kWh (Laden %.1f / Entladen %.1f).\n",
+              forecast.pointCount, forecast.totalPvKwh, forecast.totalLearnedLoadKwh,
+              forecast.totalBatteryEnergyKwh, forecast.totalBatteryChargeKwh,
+              forecast.totalBatteryDischargeKwh);
   return true;
 }
 
@@ -4098,7 +4129,9 @@ void handleSettings() {
   part += String(config.pvSystemEfficiencyPercent);
   part += F("'></label><label>Batterie-Ladewirkungsgrad (%)<input name='bateff' type='number' min='50' max='100' value='");
   part += String(config.batteryChargeEfficiencyPercent);
-  part += F("'></label><label>SOC-Schrittweite (%)<input name='socstep' type='number' min='1' max='20' value='");
+  part += F("'></label><label>Batterie-Entladewirkungsgrad (%)<input name='batdeff' type='number' min='50' max='100' value='");
+  part += String(config.batteryDischargeEfficiencyPercent);
+  part += F("'><p class='hint'>Wird verwendet, wenn eine gelernte Last die erwartete PV-Leistung übersteigt. Die Prognose nimmt konservativ an, dass der Speicher die Lücke versorgt. Standard: 95 %.</p></label><label>SOC-Schrittweite (%)<input name='socstep' type='number' min='1' max='20' value='");
   part += String(config.socStepPercent);
   part += F("'><p class='hint'>Standard: 10 %. Empfohlener Mindestwert: 3 %. Verpasste Fahrplanstufen werden nicht abgewartet; es gilt immer der zur aktuellen Uhrzeit vorgesehene Wert.</p></label><div class='caution full'><b>Achtung bei weniger als 3 %:</b> Kleinere Schritte erzeugen deutlich mehr Schreibzugriffe. Da der Max-SOC dauerhaft im Wechselrichter erhalten bleibt, kann eine zusätzliche Belastung seines nichtflüchtigen Speichers nicht ausgeschlossen werden. Nutzung kleinerer Werte auf eigene Verantwortung.</div><label>Mindestabstand Schreibzugriffe (min)<input name='writemin' type='number' min='5' max='240' value='");
   part += String(config.minimumWriteMinutes);
@@ -4384,6 +4417,8 @@ void handleSave() {
   config.forecastSafetyPercent = static_cast<uint8_t>(boundedNumberArgument("fcsafe", 80, 40, 100));
   config.pvSystemEfficiencyPercent = static_cast<uint8_t>(boundedNumberArgument("pveff", 95, 40, 100));
   config.batteryChargeEfficiencyPercent = static_cast<uint8_t>(boundedNumberArgument("bateff", 95, 50, 100));
+  config.batteryDischargeEfficiencyPercent = static_cast<uint8_t>(boundedNumberArgument(
+      "batdeff", 95, 50, 100));
   config.socStepPercent = static_cast<uint8_t>(boundedNumberArgument("socstep", 10, 1, 20));
   config.minimumWriteMinutes = static_cast<uint16_t>(boundedNumberArgument("writemin", 20, 5, 240));
   config.maximumWritesPerDay = static_cast<uint8_t>(boundedNumberArgument("writemax", 20, 1, 48));
@@ -4634,8 +4669,8 @@ const char FORECAST_HTML[] PROGMEM = R"HTML(
 <script>
 let state=null;const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=(n,d=1)=>Number.isFinite(Number(n))?Number(n).toFixed(d):'—';
-const draw=(canvas,series,colors,labels,epochs,minValue=0,maxValue=null,markers=[])=>{const dpr=devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;canvas.width=w*dpr;canvas.height=h*dpr;const c=canvas.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);const all=series.flatMap(x=>x.values).filter(Number.isFinite),max=maxValue??Math.max(minValue+1,...all),min=minValue,n=series[0]?.values.length||0,left=42,right=10,top=30,bottom=52,plotW=w-left-right,plotH=h-top-bottom;c.strokeStyle='#dfe4e8';c.fillStyle='#64717d';c.font='11px system-ui';c.textAlign='left';for(let i=0;i<=4;i++){const y=top+plotH*i/4;c.beginPath();c.moveTo(left,y);c.lineTo(w-right,y);c.stroke();c.fillText(fmt(max-(max-min)*i/4,0),2,y+4)}const maxTicks=w<520?4:7,step=Math.max(1,Math.ceil(Math.max(1,n-1)/(maxTicks-1))),ticks=[];for(let i=0;i<n;i+=step)ticks.push(i);if(n&&ticks[ticks.length-1]!==n-1)ticks.push(n-1);ticks.forEach(i=>{const x=left+plotW*(n<2?0:i/(n-1)),parts=String(labels[i]||'').split(' ');c.strokeStyle='#edf0f2';c.beginPath();c.moveTo(x,top);c.lineTo(x,top+plotH);c.stroke();c.fillStyle='#64717d';c.textAlign=i===0?'left':i===n-1?'right':'center';c.fillText(parts[0]||'',x,top+plotH+17);c.fillText(parts.slice(1).join(' '),x,top+plotH+31)});c.textAlign='left';series.forEach((s,j)=>{c.strokeStyle=colors[j];c.lineWidth=2;c.beginPath();let started=false;s.values.forEach((v,i)=>{if(!Number.isFinite(v))return;const x=left+plotW*(n<2?0:i/(n-1)),y=top+plotH-(v-min)/(max-min)*plotH;started?c.lineTo(x,y):c.moveTo(x,y);started=true});c.stroke()});if(n>1&&epochs.length===n){const first=Number(epochs[0]),last=Number(epochs[n-1]);markers.forEach((m,j)=>{const epoch=Number(m.epoch);if(!Number.isFinite(epoch)||epoch<first||epoch>last||last<=first)return;const x=left+plotW*(epoch-first)/(last-first);c.save();c.strokeStyle=m.color||'#b42318';c.fillStyle=m.color||'#b42318';c.setLineDash([5,4]);c.beginPath();c.moveTo(x,top);c.lineTo(x,top+plotH);c.stroke();c.setLineDash([]);c.fillText(m.label,x+4,top+12+j*13);c.restore()})}series.forEach((s,j)=>{c.fillStyle=colors[j];c.fillRect(left+j*150,8,12,3);c.fillText(s.name,left+18+j*150,13)})};
-const render=d=>{state=d;const s=d.status,klass=s.fresh&&!s.bypass?'ok':(s.bypass?'muted':'bad'),labels=d.points.map(x=>x.time),epochs=d.points.map(x=>x.epoch),now={epoch:Math.floor(Date.now()/1000),label:'Jetzt',color:'#b42318'},goal={epoch:s.finishEpoch,label:'Ziel',color:'#6b4f9b'};document.querySelector('#metrics').innerHTML=`<section class="card metric"><span class="muted">Steuerung</span><b class="${klass}">${s.enabled?(s.bypass?'Bypass':'Prognose'):'Aus'}</b><small>${esc(s.text)}</small></section><section class="card metric"><span class="muted">Absoluter Batteriestand / freigegebener SOC</span><b>${fmt(s.currentSoc)} / ${fmt(s.holdingMaxSoc)} %</b><small>Quelle: 10743 · ${esc(s.socTransport)} · Fahrplan-Soll: ${fmt(s.requestedSoc)} %, Min: ${fmt(s.holdingMinSoc)} %</small></section><section class="card metric"><span class="muted">PV / gelernte Last</span><b>${fmt(s.totalPv)} / ${fmt(s.totalLoad)} kWh</b><small>Für Batterie: ${fmt(s.batteryEnergy)} kWh</small></section><section class="card metric"><span class="muted">Prognoseplan / min. Batteriestand zum Erreichen des Max-SOC</span><b>${fmt(s.plannedSoc)} / ${fmt(s.reachableSoc)} %</b><small>Fertig bis ${esc(s.finish)} · Regelwrites ${s.writes}/${s.maxWrites} · Sonderwrites ${s.priorityWrites}</small></section>`;draw(document.querySelector('#energy'),[{name:'PV kW',values:d.points.map(x=>x.pv)},{name:'Last kW',values:d.points.map(x=>x.load)},{name:'Akku kWh',values:d.points.map(x=>x.battery)}],['#087f5b','#d97706','#2673c9'],labels,epochs,0,null,[now]);draw(document.querySelector('#soc'),[{name:'Plan %',values:d.points.map(x=>x.plan)},{name:'Min. für Max-SOC %',values:d.points.map(x=>x.reach)},{name:'Freigabe %',values:d.points.map(x=>x.release)}],['#087f5b','#2673c9','#d97706'],labels,epochs,0,100,[now,goal]);document.querySelector('#head').innerHTML='<tr><th>Zeit</th><th>PV kW</th><th>Last kW</th><th>Akku kWh</th><th>Plan %</th><th>Min. %</th><th>Freigabe %</th>'+d.arrays.map(a=>`<th>${esc(a.name)} W/m²</th>`).join('')+'</tr>';document.querySelector('#rows').innerHTML=d.points.map(p=>`<tr><td>${esc(p.time)}</td><td>${fmt(p.pv,2)}</td><td>${fmt(p.load,2)}</td><td>${fmt(p.battery,2)}</td><td>${fmt(p.plan)}</td><td>${fmt(p.reach)}</td><td>${fmt(p.release)}</td>${p.gti.map(x=>`<td>${x}</td>`).join('')}</tr>`).join('')};
+const draw=(canvas,series,colors,labels,epochs,minValue=0,maxValue=null,markers=[])=>{const dpr=devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;canvas.width=w*dpr;canvas.height=h*dpr;const c=canvas.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);const all=series.flatMap(x=>x.values).filter(Number.isFinite),min=minValue===null?Math.min(0,...all):minValue,max=maxValue??Math.max(min+1,...all),n=series[0]?.values.length||0,left=42,right=10,top=30,bottom=52,plotW=w-left-right,plotH=h-top-bottom;c.strokeStyle='#dfe4e8';c.fillStyle='#64717d';c.font='11px system-ui';c.textAlign='left';for(let i=0;i<=4;i++){const y=top+plotH*i/4;c.beginPath();c.moveTo(left,y);c.lineTo(w-right,y);c.stroke();c.fillText(fmt(max-(max-min)*i/4,0),2,y+4)}const maxTicks=w<520?4:7,step=Math.max(1,Math.ceil(Math.max(1,n-1)/(maxTicks-1))),ticks=[];for(let i=0;i<n;i+=step)ticks.push(i);if(n&&ticks[ticks.length-1]!==n-1)ticks.push(n-1);ticks.forEach(i=>{const x=left+plotW*(n<2?0:i/(n-1)),parts=String(labels[i]||'').split(' ');c.strokeStyle='#edf0f2';c.beginPath();c.moveTo(x,top);c.lineTo(x,top+plotH);c.stroke();c.fillStyle='#64717d';c.textAlign=i===0?'left':i===n-1?'right':'center';c.fillText(parts[0]||'',x,top+plotH+17);c.fillText(parts.slice(1).join(' '),x,top+plotH+31)});c.textAlign='left';series.forEach((s,j)=>{c.strokeStyle=colors[j];c.lineWidth=2;c.beginPath();let started=false;s.values.forEach((v,i)=>{if(!Number.isFinite(v))return;const x=left+plotW*(n<2?0:i/(n-1)),y=top+plotH-(v-min)/(max-min)*plotH;started?c.lineTo(x,y):c.moveTo(x,y);started=true});c.stroke()});if(n>1&&epochs.length===n){const first=Number(epochs[0]),last=Number(epochs[n-1]);markers.forEach((m,j)=>{const epoch=Number(m.epoch);if(!Number.isFinite(epoch)||epoch<first||epoch>last||last<=first)return;const x=left+plotW*(epoch-first)/(last-first);c.save();c.strokeStyle=m.color||'#b42318';c.fillStyle=m.color||'#b42318';c.setLineDash([5,4]);c.beginPath();c.moveTo(x,top);c.lineTo(x,top+plotH);c.stroke();c.setLineDash([]);c.fillText(m.label,x+4,top+12+j*13);c.restore()})}series.forEach((s,j)=>{c.fillStyle=colors[j];c.fillRect(left+j*150,8,12,3);c.fillText(s.name,left+18+j*150,13)})};
+const render=d=>{state=d;const s=d.status,klass=s.fresh&&!s.bypass?'ok':(s.bypass?'muted':'bad'),labels=d.points.map(x=>x.time),epochs=d.points.map(x=>x.epoch),now={epoch:Math.floor(Date.now()/1000),label:'Jetzt',color:'#b42318'},goal={epoch:s.finishEpoch,label:'Ziel',color:'#6b4f9b'};document.querySelector('#metrics').innerHTML=`<section class="card metric"><span class="muted">Steuerung</span><b class="${klass}">${s.enabled?(s.bypass?'Bypass':'Prognose'):'Aus'}</b><small>${esc(s.text)}</small></section><section class="card metric"><span class="muted">Absoluter Batteriestand / freigegebener SOC</span><b>${fmt(s.currentSoc)} / ${fmt(s.holdingMaxSoc)} %</b><small>Quelle: 10743 · ${esc(s.socTransport)} · Fahrplan-Soll: ${fmt(s.requestedSoc)} %, Min: ${fmt(s.holdingMinSoc)} %</small></section><section class="card metric"><span class="muted">PV / gelernte Last</span><b>${fmt(s.totalPv)} / ${fmt(s.totalLoad)} kWh</b><small>Akku netto: ${fmt(s.batteryEnergy)} kWh · Laden: ${fmt(s.batteryCharge)} kWh · erwartete Entladung: ${fmt(s.batteryDischarge)} kWh</small></section><section class="card metric"><span class="muted">Prognoseplan / min. Batteriestand zum Erreichen des Max-SOC</span><b>${fmt(s.plannedSoc)} / ${fmt(s.reachableSoc)} %</b><small>Fertig bis ${esc(s.finish)} · Regelwrites ${s.writes}/${s.maxWrites} · Sonderwrites ${s.priorityWrites}</small></section>`;draw(document.querySelector('#energy'),[{name:'PV kW',values:d.points.map(x=>x.pv)},{name:'Last kW',values:d.points.map(x=>x.load)},{name:'Akku kWh (+/−)',values:d.points.map(x=>x.battery)}],['#087f5b','#d97706','#2673c9'],labels,epochs,null,null,[now]);draw(document.querySelector('#soc'),[{name:'Plan %',values:d.points.map(x=>x.plan)},{name:'Min. für Max-SOC %',values:d.points.map(x=>x.reach)},{name:'Freigabe %',values:d.points.map(x=>x.release)}],['#087f5b','#2673c9','#d97706'],labels,epochs,0,100,[now,goal]);document.querySelector('#head').innerHTML='<tr><th>Zeit</th><th>PV kW</th><th>Last kW</th><th>Akku kWh (+ Laden / − Entladen)</th><th>Plan %</th><th>Min. %</th><th>Freigabe %</th>'+d.arrays.map(a=>`<th>${esc(a.name)} W/m²</th>`).join('')+'</tr>';document.querySelector('#rows').innerHTML=d.points.map(p=>`<tr><td>${esc(p.time)}</td><td>${fmt(p.pv,2)}</td><td>${fmt(p.load,2)}</td><td>${fmt(p.battery,2)}</td><td>${fmt(p.plan)}</td><td>${fmt(p.reach)}</td><td>${fmt(p.release)}</td>${p.gti.map(x=>`<td>${x}</td>`).join('')}</tr>`).join('')};
 const load=async()=>{try{const r=await fetch('/api/forecast',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);render(await r.json())}catch(e){document.querySelector('#message').textContent='Fehler: '+e.message}};document.querySelector('#refresh').addEventListener('click',async()=>{await fetch('/api/forecast/refresh',{method:'POST'});document.querySelector('#message').textContent='Abruf eingeplant …';setTimeout(load,1200)});load();setInterval(load,10000);addEventListener('resize',()=>state&&render(state));
 </script></body></html>
 )HTML";
@@ -4708,7 +4743,10 @@ void handleForecastApi() {
   out += F(",\"writes\":"); out += String(maxSocWritesToday); out += F(",\"maxWrites\":"); out += String(effectiveMaxSocWritesPerDay());
   out += F(",\"priorityWrites\":"); out += String(priorityMaxSocWritesToday);
   out += F(",\"totalPv\":"); out += String(forecast.totalPvKwh, 2); out += F(",\"totalLoad\":"); out += String(forecast.totalLearnedLoadKwh, 2);
-  out += F(",\"batteryEnergy\":"); out += String(forecast.totalBatteryEnergyKwh, 2); out += F("},\"arrays\":[");
+  out += F(",\"batteryEnergy\":"); out += String(forecast.totalBatteryEnergyKwh, 2);
+  out += F(",\"batteryCharge\":"); out += String(forecast.totalBatteryChargeKwh, 2);
+  out += F(",\"batteryDischarge\":"); out += String(forecast.totalBatteryDischargeKwh, 2);
+  out += F("},\"arrays\":[");
   sendChunk(out);
   bool first = true;
   for (size_t i = 0; i < PV_ARRAY_COUNT; ++i) {
