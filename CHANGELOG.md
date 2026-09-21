@@ -2,12 +2,15 @@
 
 ## Unveröffentlicht
 
-- ergänzt Netzfrequenz 5036 (nullbasiert 5035, Faktor 0,1 Hz) als optionalen Rückfallwert, wenn `Grid state` 13030 nicht lesbar ist
-- wertet eine frische Frequenz von 45 bis 65 Hz als plausiblen Netzbetrieb und Werte außerhalb dieses Bereichs als möglichen Netzausfall; fehlende oder veraltete Werte bleiben sicherheitshalber unbekannt
-- verwendet dieselbe Netzprüfung für Pushover und die Sperrkette der dynamischen Netzladung und dokumentiert die notwendige Praxisprüfung bei Inselanlagen
+## 1.3.1 – 2026-09-21
+
+- korrigiert die Skalierung der Netzfrequenz 5036 (nullbasiert 5035) von 0,1 auf 0,01 Hz und zeigt den Wert mit zwei Nachkommastellen an
 
 ## 1.3.0 – 2026-09-21
 
+- ergänzt Netzfrequenz 5036 (nullbasiert 5035) als optionalen Rückfallwert, wenn `Grid state` 13030 nicht lesbar ist
+- wertet eine frische Frequenz von 45 bis 65 Hz als plausiblen Netzbetrieb und Werte außerhalb dieses Bereichs als möglichen Netzausfall; fehlende oder veraltete Werte bleiben sicherheitshalber unbekannt
+- verwendet dieselbe Netzprüfung für Pushover und die Sperrkette der dynamischen Netzladung und dokumentiert die notwendige Praxisprüfung bei Inselanlagen
 - ergänzt den Tab **Stromtarif** und eine zweistufige Steuerung für dynamische Tarife: zunächst reine Planung, automatische Netzladung nur nach einer separaten ausdrücklichen Freigabe
 - unterstützt Tibber, aWATTar Deutschland, Octopus Energy und eine normierte eigene REST-API
 - verbindet die Zwei-Tage-Open-Meteo-Prognose mit absolutem Batterie-SOC, Batteriekapazität und gelerntem 15-Minuten-Lastprofil, um den voraussichtlich fehlenden Energieanteil bis zum nächsten Ladeende zu bestimmen

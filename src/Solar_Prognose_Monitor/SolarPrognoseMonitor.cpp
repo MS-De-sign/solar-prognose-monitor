@@ -61,7 +61,7 @@
 */
 
 namespace ConfigDefaults {
-constexpr char FIRMWARE_VERSION[] = "1.3.0";
+constexpr char FIRMWARE_VERSION[] = "1.3.1";
 constexpr char MANUFACTURER[] = "MS-De-sign / Marcus Sonntag";
 constexpr char LICENSE_TEXT[] = "PolyForm Noncommercial License 1.0.0";
 constexpr char PROJECT_URL[] = "https://github.com/MS-De-sign/solar-prognose-monitor";
@@ -346,7 +346,7 @@ RegisterDef registers[] = {
   REG16(5020, "Voltage phase C", "Spannung Phase C", "V", ValueType::U16, 0.1f, 0.0f, 1),
   REG32(5032, "Reactive Power", "Blindleistung", "var", ValueType::S32_WORD_SWAPPED, 1.0f, 0.0f, 0),
   REG16(5034, "Power Factor", "Leistungsfaktor", "", ValueType::S16, 0.001f, 0.0f, 3),
-  REG16(5035, "Grid Frequency", "Netzfrequenz", "Hz", ValueType::U16, 0.1f, 0.0f, 1),
+  REG16(5035, "Grid Frequency", "Netzfrequenz", "Hz", ValueType::U16, 0.01f, 0.0f, 2),
 
   REG32(5600, "DTSU666 total power", "Smart Meter Gesamtleistung", "W", ValueType::S32_WORD_SWAPPED, 1.0f, 0.0f, 0),
   REG32(5602, "DTSU666 phase L1 power", "Smart Meter Leistung L1", "W", ValueType::S32_WORD_SWAPPED, 1.0f, 0.0f, 0),
@@ -506,7 +506,7 @@ static_assert(REGISTER_COUNT == 153, "Die Registerliste muss genau 153 Eintraege
 RegisterDef registers[] = {
   REG16(5007, "Inside Temperature", "Temperatur im Wechselrichter", "°C", ValueType::S16, 0.1f, 0.0f, 1),
   REG32(5016, "Total DC Power", "PV-Leistung aktuell", "W", ValueType::U32_WORD_SWAPPED, 1.0f, 0.0f, 0),
-  REG16(5035, "Grid Frequency", "Netzfrequenz", "Hz", ValueType::U16, 0.1f, 0.0f, 1),
+  REG16(5035, "Grid Frequency", "Netzfrequenz", "Hz", ValueType::U16, 0.01f, 0.0f, 2),
   METER32(5746, "DTSU666 import energy", "Smart Meter Netzbezug gesamt", "kWh", ValueType::U32_WORD_SWAPPED, 0.01f, 0.0f, 2),
   METER32(5748, "DTSU666 export energy", "Smart Meter Netzeinspeisung gesamt", "kWh", ValueType::U32_WORD_SWAPPED, 0.01f, 0.0f, 2),
   REG16(13001, "Daily PV Generation", "PV-Erzeugung heute", "kWh", ValueType::U16, 0.1f, 0.0f, 1),
@@ -1257,13 +1257,13 @@ GridAvailability evaluateGridAvailability(String *evidence = nullptr) {
   }
 
   // Rueckfall fuer Wechselrichter, die Grid state nicht anbieten: Register
-  // 5036 wird im nullbasierten Sketch als 5035 gelesen und liefert 0,1 Hz.
+  // 5036 wird im nullbasierten Sketch als 5035 gelesen und liefert 0,01 Hz.
   // 45..65 Hz deckt 50- und 60-Hz-Netze ab. Ein Inselwechselrichter kann am
   // Ersatzstromausgang weiterhin Nennfrequenz erzeugen; dies ist daher nur
   // eine Plausibilitaetserkennung und kein Ersatz fuer einen Netzschutz.
   if (isFresh(gridFrequency)) {
     const float hz = static_cast<float>(gridFrequency->value);
-    if (evidence != nullptr) *evidence = "Netzfrequenz 5036 = " + String(hz, 1) + " Hz";
+    if (evidence != nullptr) *evidence = "Netzfrequenz 5036 = " + String(hz, 2) + " Hz";
     return hz >= 45.0f && hz <= 65.0f
         ? GridAvailability::AVAILABLE
         : GridAvailability::UNAVAILABLE;

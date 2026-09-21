@@ -45,7 +45,7 @@ Das Suchfeld filtert die Tabelle nach Adresse, englischem Namen, deutscher Besch
 |---:|---|---|
 | 5007 | Inside Temperature | Temperatur im Wechselrichter in °C. |
 | 5016 | Total DC Power | Momentane gesamte PV-Leistung in W. |
-| 5035 | Grid Frequency | Netzfrequenz aus Herstellerregister 5036 in Hz. Optionaler Rückfallwert für den Netzstatus. |
+| 5035 | Grid Frequency | Netzfrequenz aus Herstellerregister 5036 mit Faktor 0,01 Hz. Optionaler Rückfallwert für den Netzstatus. |
 | 5746 | DTSU666 import energy | Gesamter Netzbezug des Smart Meters in kWh. Das Register wird optional über die feste Unit-ID 254 gelesen; ein Fehler beeinflusst die übrige Abfrage nicht. |
 | 5748 | DTSU666 export energy | Gesamte Netzeinspeisung des Smart Meters in kWh, ebenfalls optional über Unit-ID 254. |
 | 13001 | Daily PV Generation | PV-Erzeugung des aktuellen Tages in kWh. |
