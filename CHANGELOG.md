@@ -2,7 +2,7 @@
 
 ## Unveröffentlicht
 
-## 1.2.0 – unveröffentlicht
+## 1.2.0 – 2026-09-21
 
 - ergänzt unter Einstellungen die Ladestrategien **Ideal laden** und **Vorausladen**
 - lässt **Ideal laden** unverändert energie- und lastabhängig arbeiten; **Vorausladen** gibt bis zur zeitlichen Mitte des nutzbaren PV-Fensters mindestens 80 % und anschließend den Rest bis zum geplanten Ladeende frei
