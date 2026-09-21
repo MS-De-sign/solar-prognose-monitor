@@ -12,11 +12,11 @@ Dafür kombiniert die Software mehrere Informationen:
 - die noch erwartete PV-Energie bis zum geplanten Ladeende,
 - sowie ein lokal erlerntes Verbrauchsprofil.
 
-Der Hausverbrauch wird für jeden Wochentag in 15-Minuten-Blöcken gelernt. Wiederkehrende Lasten – beispielsweise ein regelmäßig am Nachmittag geladenes Elektroauto – fließen dadurch zunehmend in die Planung ein. Berechnung, Lernprofil und Messverlauf bleiben auf dem ESP32; lediglich die Wettervorhersage wird von Open-Meteo abgerufen. Ein eigener Cloud- oder Herstellerserver ist nicht erforderlich.
+Der Hausverbrauch wird für jeden Wochentag in 15-Minuten-Blöcken gelernt. Wiederkehrende Lasten – beispielsweise ein regelmäßig am Nachmittag geladenes Elektroauto – fließen dadurch zunehmend in die Planung ein. Jede stündliche Open-Meteo-Prognose wird intern in vier Viertelstunden aufgeteilt und mit den vier jeweils passenden Lastprofilwerten verrechnet. Berechnung, Lernprofil und Messverlauf bleiben auf dem ESP32; lediglich die Wettervorhersage wird von Open-Meteo abgerufen. Ein eigener Cloud- oder Herstellerserver ist nicht erforderlich.
 
 Die Steuerung gibt den zulässigen Ladezielwert schrittweise frei. Bei einer unerwarteten Wolkenphase wartet sie nicht auf eine verpasste Zwischenstufe, sondern wechselt auf den zur aktuellen Uhrzeit vorgesehenen Wert. Zusätzlich prüft sie, welcher Batteriestand mindestens freigegeben werden muss, damit das Tagesziel mit der noch erwarteten Energie erreichbar bleibt. Sicherheitsreserve, gewünschtes Ladeende und Schrittweite lassen sich einstellen. Da Wetter- und Verbrauchsprognosen nie vollkommen exakt sind, ersetzt das System keine Anlagenüberwachung und sollte bei der ersten Inbetriebnahme kontrolliert werden.
 
-Aktuelle Version: **1.1.2**
+Aktuelle Version: **1.2.0**
 
 **Hardwarestand:** Die aktuelle Firmware ist für ein klassisches **ESP32 DevKit mit ESP32-WROOM-Modul** ausgelegt. Weitere ESP32-Varianten wie der **ESP32-C3** werden derzeit getestet; Pinbelegung, Partitionierung und Programmcode werden dafür schrittweise angepasst. Bis eine Variante ausdrücklich als unterstützt gekennzeichnet ist, sollte dafür nicht ungeprüft die DevKit-Firmware verwendet werden.
 
@@ -27,7 +27,7 @@ Aktuelle Version: **1.1.2**
 - getrennte Webansichten für Wechselrichter und Batterie
 - eigener WLAN-Access-Point mit dauerhaft gespeicherten WLAN-Einstellungen
 - Open-Meteo-Prognose für bis zu vier unterschiedlich ausgerichtete Dachflächen
-- lokales, je Wochentag erlerntes 15-Minuten-Lastprofil mit stündlicher und updatefester Speicherung
+- lokales, je Wochentag erlerntes 15-Minuten-Lastprofil, vollständige Viertelstunden-Verrechnung in der Ladeprognose sowie stündliche und updatefeste Speicherung
 - fünf kumulative Überschuss-Stufen über GPIO oder HTTP-API
 - wahlweise drei oder vier frei belegbare Eingänge für einen Rundsteuerempfänger mit automatischer Einspeisebegrenzung
 - 3-Kontakt-Modus mit 100 % bei ruhenden Eingängen oder 4-Kontakt-Modus mit eigenem 100-%-Signal
@@ -45,7 +45,7 @@ Aktuelle Version: **1.1.2**
 
 Es gibt genau einen konfigurierbaren Ladezielwert im Bereich von 50 bis 100 Prozent. Im Wechselrichter wird dieser technisch über den sogenannten Max-SOC vorgegeben.
 
-- **Prognose:** Der ESP32 verteilt die Ladefreigaben vorwärts über den verbleibenden PV-Zeitraum. Stündliche Wetterwerte werden innerhalb der Stunde zeitanteilig geglättet. Das Erreichen einer freigegebenen Stufe löst nicht sofort die nächste Stufe aus. Ist eine Stufe wegen Bewölkung noch nicht erreicht, gilt trotzdem der zur aktuellen Uhrzeit vorgesehene höhere Fahrplanwert. Dadurch kann die Batterie später wieder aufholen.
+- **Prognose:** Der ESP32 verteilt die Ladefreigaben vorwärts über den verbleibenden PV-Zeitraum. Jeder stündliche Wetterwert wird in vier Viertelstunden zerlegt und mit der jeweils gelernten Viertelstundenlast verrechnet. Die SOC-Regelung bewertet den Fahrplan an den Viertelstundengrenzen sowie zusätzlich genau zum geplanten Ladeende. Das Erreichen einer freigegebenen Stufe löst nicht sofort die nächste Stufe aus. Ist eine Stufe wegen Bewölkung noch nicht erreicht, gilt trotzdem der zur aktuellen Uhrzeit vorgesehene höhere Fahrplanwert. Dadurch kann die Batterie später wieder aufholen.
 - **Bypass:** Der eingestellte Ladezielwert wird einmal geschrieben und durch Rücklesen geprüft. Danach greift der ESP32 nicht mehr regelmäßig ein. Änderungen über die Sungrow-App bleiben somit möglich. Ein neuer Schreibauftrag entsteht erst beim erneuten Wechsel auf Bypass oder nach einer Änderung des Ladezielwerts.
 
 **Wichtig bei Wartung und Inbetriebnahme:** Vor Wartungs-, Service-, Umbau- oder Inbetriebnahmearbeiten an Wechselrichter oder Batteriesystem muss die Batteriespeicher-Steuerung unter **Einstellungen** auf **Bypass** gestellt und gespeichert werden. Dadurch erfolgen nach dem einmaligen, geprüften Bypass-Auftrag keine regelmäßigen Max-SOC-Eingriffe mehr. Besonders wichtig ist dies bei einer Batterieerweiterung: Sungrow kann den Speicher während der Angleichung neuer Batteriemodule automatisch bis ungefähr 40 % laden oder entladen. Im Prognosebetrieb könnten wiederholte Max-SOC-Freigaben diesen Ablauf beeinflussen. Erst nach vollständig abgeschlossenen Arbeiten und Freigabe durch den Fachbetrieb darf wieder auf Prognose umgestellt werden. Hersteller- und Fachbetriebsvorgaben haben immer Vorrang.
@@ -96,10 +96,10 @@ Der Sketch verwendet ausschließlich Bibliotheken aus dem ESP32-Core.
 Für einen reproduzierbaren Build beider Varianten im Projektordner ausführen:
 
 ```powershell
-.\scripts\build-release.ps1 -Version 1.1.2
+.\scripts\build-release.ps1 -Version 1.2.0
 ```
 
-Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.1.2`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
+Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.2.0`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
 
 ### Erstinstallation der Partitionstabelle
 

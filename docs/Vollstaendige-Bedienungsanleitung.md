@@ -1,6 +1,6 @@
 # Vollständige Bedienungsanleitung
 
-Stand: Firmware **1.1.2**
+Stand: Firmware **1.2.0**
 
 Diese Anleitung beschreibt jede Seite und jedes sichtbare Bedien- oder Anzeigefeld des Solar Prognose Monitors. Die mathematischen Hintergründe stehen bewusst gesammelt im letzten Kapitel. Die erste Geräteintegration unterstützt Sungrow-Wechselrichter und -Batteriespeicher.
 
@@ -104,7 +104,7 @@ Die Betriebsart wird hier nur angezeigt. Umschalten ist ausschließlich unter **
 | Element | Bedeutung |
 |---|---|
 | Open-Meteo neu laden | Plant sofort einen neuen Wetterabruf ein. Die Antwort erfolgt im Hintergrund; die Statusmeldung aktualisiert sich danach. |
-| PV-Prognose und gelerntes Lastprofil | Zeigt je Prognosestunde PV-Leistung, erwartete Last und daraus anrechenbare Batterieenergie. Datum und Uhrzeit stehen auf der X-Achse. |
+| PV-Prognose und gelerntes Lastprofil | Zeigt in 15-Minuten-Schritten PV-Leistung, den jeweils passenden gelernten Lastprofilwert und daraus anrechenbare Batterieenergie. Datum und Uhrzeit stehen auf der X-Achse. |
 | SOC-Fahrplan | Zeigt Prognoseplan, mindestens erforderlichen Batteriestand und den daraus gerasterten Freigabe-Zeitplan. Senkrechte Linien markieren den aktuellen Zeitpunkt und das geplante Ladeende. |
 | Open-Meteo-Werte je Dachfläche | Tabelle mit Datum/Uhrzeit, Gesamt-PV, erwarteter Last, Batterieenergie, beiden SOC-Berechnungen, gerasterter Freigabe und der Einstrahlung auf jede aktivierte Dachfläche. Damit ist nachvollziehbar, welcher Wert zu welcher Zeit gelten soll. |
 
@@ -121,7 +121,7 @@ Die Betriebsart wird hier nur angezeigt. Umschalten ist ausschließlich unter **
 | Diagramm Erwartung | Summe aus gelernter Grundlast und erwartetem Großlastanteil. Diese Kurve fließt in die PV-Prognose ein. |
 | Diagramm Heute | Heute tatsächlich beobachteter, bereinigter Verbrauch. |
 
-Die Tabelle darunter enthält für jeden 15-Minuten-Block die Spalten **Zeit**, **Grundlast**, **Großlast-Anteil**, **Erwartung**, **Heute** und **Wahrscheinlichkeit**. Eigene eingeschaltete Überschuss-Stufen werden vor dem Lernen abgezogen. Dadurch lernt die Software nicht versehentlich die von ihr selbst zugeschaltete Heizpatrone als normalen Hausverbrauch. Das Profil lernt in Prognose und Bypass weiter.
+Die Tabelle darunter enthält für jeden 15-Minuten-Block die Spalten **Zeit**, **Grundlast**, **Großlast-Anteil**, **Erwartung**, **Heute** und **Wahrscheinlichkeit**. Eigene eingeschaltete Überschuss-Stufen werden vor dem Lernen abgezogen. Dadurch lernt die Software nicht versehentlich die von ihr selbst zugeschaltete Heizpatrone als normalen Hausverbrauch. Das Profil lernt in Prognose und Bypass weiter. In der Ladeprognose werden alle vier Viertelstunden einer Open-Meteo-Stunde einzeln verrechnet; eine um `:15`, `:30` oder `:45` erwartete Last wird nicht mehr durch den Wert am Stundenanfang ersetzt.
 
 Das Lernprofil wird mindestens stündlich und unmittelbar vor einem Browser-Firmwareupdate gespeichert. Ein normales Firmwareupdate erhält es. Es geht nur durch **Lernprofil löschen**, vollständiges Löschen des ESP32-Flashs oder ein zukünftig inkompatibles Speicherformat verloren.
 
@@ -329,7 +329,7 @@ Der Max-SOC wird auf Unit-ID 1 per Holding-Register geschrieben und sofort mit e
 
 ### 11.2 Open-Meteo und PV-Energie
 
-Für jede Stunde und jede aktivierte Dachfläche:
+Für jede Open-Meteo-Stunde und jede aktivierte Dachfläche wird zunächst die PV-Leistung bestimmt. Anschließend wird die Stunde in vier Viertelstunden zerlegt:
 
 ```text
 PV-Leistung Fläche [kW]
@@ -343,13 +343,13 @@ PV-Leistung gesamt [kW]
 PV-Überschuss [kW]
   = max(0, PV-Leistung gesamt − erwartete Hauslast)
 
-Batterieenergie der Stunde [kWh]
-  = PV-Überschuss [kW] × 1 h
+Batterieenergie der Viertelstunde [kWh]
+  = PV-Überschuss dieser Viertelstunde [kW] × 0,25 h
     × Batterie-Ladewirkungsgrad / 100
     × Prognose-Sicherheitsfaktor / 100
 ```
 
-Der betrachtete Zeitraum reicht vom Abrufzeitpunkt der aktuellen Prognose bis `Sonnenuntergang − Fertig-vor-Sonnenuntergang`. Angebrochene erste und letzte Stunden werden nur mit ihrem tatsächlichen Zeitanteil berücksichtigt. Innerhalb der laufenden Stunde wird die Energie proportional zur verstrichenen Zeit eingerechnet. Dadurch entsteht aus den Stundenwerten ein geglätteter Fahrplan.
+Für `:00`, `:15`, `:30` und `:45` wird jeweils der dazugehörige Lastprofilwert eingesetzt. Die Energie der vollständigen Wetterstunde ist die Summe dieser vier Ergebnisse. Der betrachtete Zeitraum reicht vom Abrufzeitpunkt der aktuellen Prognose bis `Sonnenuntergang − Fertig-vor-Sonnenuntergang`. Angebrochene erste, letzte und laufende Viertelstunden werden nur mit ihrem tatsächlichen Zeitanteil berücksichtigt. Die SOC-Regelung bewertet den Plan an den Viertelstundengrenzen neu und prüft das konfigurierte Ladeende zusätzlich exakt. Schlägt eine Modbusabfrage fehl, wird bereits nach fünf Minuten erneut versucht.
 
 ### 11.3 SOC-Fahrplan
 
@@ -407,7 +407,7 @@ Zum geplanten Ladeende wird der konfigurierte Max-SOC als Sonderfreigabe geschri
 
 ### 11.4 Lernendes 15-Minuten-Lastprofil
 
-Der Tag ist in 96 Viertelstunden unterteilt. Pro Wochentag werden Grundlast, Ereignisleistung und Ereigniswahrscheinlichkeit gespeichert. Eigene aktive Überschusslasten werden vor dem Lernen abgezogen.
+Der Tag ist in 96 Viertelstunden unterteilt. Pro Wochentag werden Grundlast, Ereignisleistung und Ereigniswahrscheinlichkeit gespeichert. Eigene aktive Überschusslasten werden vor dem Lernen abgezogen. Diese 15-Minuten-Auflösung wird nicht nur angezeigt und gespeichert, sondern ab Version 1.2.0 vollständig in der Energie- und SOC-Prognose verwendet.
 
 Vereinfacht wird ein neuer Messwert mit einer exponentiellen Gewichtung eingemischt:
 

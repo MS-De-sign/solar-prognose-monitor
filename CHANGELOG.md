@@ -2,6 +2,14 @@
 
 ## Unveröffentlicht
 
+## 1.2.0 – unveröffentlicht
+
+- zerlegt jede stündliche Open-Meteo-Prognose intern in vier Viertelstunden
+- verrechnet in jeder Viertelstunde den tatsächlich zu diesem Zeitpunkt gelernten Lastprofilwert statt nur den Wert am Stundenanfang
+- berücksichtigt dadurch Lastsprünge um `:15`, `:30` und `:45` vollständig in PV-, Last-, Batterieenergie- und SOC-Fahrplan
+- zeigt Prognosekurven und Wertetabelle künftig in 15-Minuten-Auflösung
+- richtet die SOC-Regelprüfung an den Viertelstundengrenzen aus und prüft zusätzlich exakt zum konfigurierten Ladeende; Modbusfehler werden weiterhin nach fünf Minuten erneut versucht
+
 ## 1.1.2 – 2026-09-20
 
 - ergänzt als abschließende Pushover-Funktion eine auswählbare Meldung über neue Firmware-Releases

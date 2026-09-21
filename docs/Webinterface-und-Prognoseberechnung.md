@@ -1,12 +1,12 @@
 # Bedienung und Prognoseberechnung
 
-Diese Dokumentation beschreibt den aktuellen Stand des Sketches. Die `.ino` enthält nur den Arduino-Einstieg, die Programmschnittstelle liegt in `SungrowMonitor.h` und die eigentliche Anwendung in `SungrowMonitor.cpp`.
+Diese Dokumentation beschreibt den aktuellen Stand des Sketches. Die `.ino` enthält nur den Arduino-Einstieg, die Programmschnittstelle liegt in `SolarPrognoseMonitor.h` und die eigentliche Anwendung in `SolarPrognoseMonitor.cpp`.
 
 ## 1. Was die Prognose tatsächlich berechnet
 
 Die Software gibt **keine feste Ladeleistung** für die Batterie vor. Sie schätzt, wie viel PV-Energie bis zum geplanten Ladeende noch für die Batterie verfügbar sein dürfte, und hebt daraus den erlaubten **Max-SOC** schrittweise an.
 
-Open-Meteo liefert für jede aktivierte Dachfläche stündliche Werte der Einstrahlung auf die geneigte Modulfläche (`global_tilted_irradiance`, GTI) in W/m². Für jede Prognosestunde wird gerechnet:
+Open-Meteo liefert für jede aktivierte Dachfläche stündliche Werte der Einstrahlung auf die geneigte Modulfläche (`global_tilted_irradiance`, GTI) in W/m². Die Software zerlegt jede Wetterstunde intern in vier Viertelstunden. Der PV-Wert gilt innerhalb dieser Stunde für alle vier Abschnitte, während für `:00`, `:15`, `:30` und `:45` jeweils der eigene gelernte Lastprofilwert verwendet wird. Für jede Viertelstunde wird gerechnet:
 
 ```text
 PV-Leistung = Summe je Dachfläche aus
@@ -14,20 +14,20 @@ PV-Leistung = Summe je Dachfläche aus
 
 PV-Überschuss = max(0, PV-Leistung − erwartete Hauslast)
 
-Energie für Batterie = PV-Überschuss × 1 Stunde
+Energie für Batterie = PV-Überschuss × 0,25 Stunden
                        × Batterie-Ladewirkungsgrad
                        × Prognose-Sicherheitsfaktor
 ```
 
-Da Open-Meteo Stundenwerte liefert, entspricht eine volle Stunde mit einem kW-Mittelwert numerisch derselben Energiemenge in kWh. Berücksichtigt wird der Zeitraum vom Abruf der aktuellen Prognose bis:
+Die Energie einer Wetterstunde ist die Summe ihrer vier einzeln berechneten Viertelstunden. Dadurch wird zum Beispiel eine um 14:30 Uhr erwartete Autoladung auch dann berücksichtigt, wenn die Grundlast um 14:00 Uhr noch niedrig war. Berücksichtigt wird der Zeitraum vom Abruf der aktuellen Prognose bis:
 
 ```text
 Sonnenuntergang − „Fertig vor Sonnenuntergang“
 ```
 
-Die angezeigte Prognose „PV“ ist damit eine Energiemenge in kWh, nicht die momentan verlangte Ladeleistung. Angebrochene Anfangs- und Endstunden werden zeitanteilig gerechnet. Während einer Stunde wächst der Fahrplan entsprechend dem bereits verstrichenen Stundenanteil kontinuierlich weiter, statt den gesamten Stundenwert sofort vorwegzunehmen.
+Die angezeigte Prognose „PV“ ist damit eine Energiemenge in kWh, nicht die momentan verlangte Ladeleistung. Angebrochene Anfangs-, End- und Viertelstunden werden nur mit ihrem tatsächlichen Zeitanteil gerechnet. Der SOC-Fahrplan wird an jeder Viertelstundengrenze neu bewertet; das konfigurierte Ladeende wird unabhängig davon exakt geprüft.
 
-### Zahlenbeispiel für eine Stunde
+### Zahlenbeispiel für eine Viertelstunde
 
 Angenommen:
 
@@ -43,11 +43,12 @@ Dann ergibt sich:
 ```text
 PV-Leistung          = 10,0 × 800 / 1000 × 0,95 = 7,60 kW
 PV-Überschuss        = 7,60 − 1,00              = 6,60 kW
-nach Ladeverlusten   = 6,60 × 0,95              = 6,27 kWh
-sicher angerechnet   = 6,27 × 0,80              = 5,016 kWh
+Energie in 15 min    = 6,60 × 0,25 h            = 1,650 kWh
+nach Ladeverlusten   = 1,650 × 0,95             = 1,568 kWh
+sicher angerechnet   = 1,568 × 0,80             = 1,254 kWh
 ```
 
-Für diese Stunde plant die Software also mit rund **5,02 kWh nutzbarer Batterieenergie**. Bei fünf identischen Stunden wären es 25,08 kWh. Eine Begrenzung durch die maximale Wechselrichter- oder Batterieladeleistung ist in dieser Prognoserechnung derzeit nicht enthalten.
+Für diese Viertelstunde plant die Software also mit rund **1,25 kWh nutzbarer Batterieenergie**. Sind alle vier Viertelstunden identisch, ergeben sich für die vollständige Stunde rund 5,02 kWh. Wechselt die gelernte Hauslast innerhalb der Stunde, wird jeder Abschnitt separat berechnet. Eine Begrenzung durch die maximale Wechselrichter- oder Batterieladeleistung ist in dieser Prognoserechnung derzeit nicht enthalten.
 
 ## 2. Bedeutung der drei Faktoren
 
@@ -85,7 +86,7 @@ Die Faktoren werden multipliziert, nicht addiert. Mit 95 % Ladewirkungsgrad und 
 
 Beim Abruf einer neuen Prognose merkt sich die Software den aktuellen SOC als Startpunkt. Danach entstehen zwei SOC-Kurven:
 
-1. **Prognoseplan:** Der Weg vom Start-SOC zum eingestellten Max-SOC wird entsprechend dem zeitlichen Anteil der prognostizierten Batterieenergie verteilt. Stunden mit viel erwarteter Energie heben die Grenze stärker an.
+1. **Prognoseplan:** Der Weg vom Start-SOC zum eingestellten Max-SOC wird entsprechend dem zeitlichen Anteil der prognostizierten Batterieenergie verteilt. Viertelstunden mit viel erwarteter Energie heben die Grenze stärker an.
 2. **Mindest-SOC zum Erreichen des Max-SOC:** Die Grenze wird mindestens so weit geöffnet, dass die noch erwartete Energie rechnerisch genügt, um den eingestellten Max-SOC bis zum Ladeende zu erreichen.
 
 Vereinfacht:
@@ -132,7 +133,7 @@ Ist die Prognose veraltet oder nicht verfügbar, wird der konfigurierte Max-SOC 
 
 Der Hausverbrauch wird aus Modbus-Adresse 13007 übernommen und in 96 Viertelstunden je Wochentag gelernt. Leistungen eigener eingeschalteter Überschuss-Stufen werden vorher abgezogen, damit sie nicht fälschlich als normaler Hausverbrauch gelernt werden.
 
-Grundlast und wiederkehrende Großlasten werden getrennt gespeichert. Dadurch kann zum Beispiel eine regelmäßig nachmittags auftretende Autoladung mit ihrer bisherigen Wahrscheinlichkeit in die nächste Prognose eingehen. Neue Beobachtungen werden mit der eingestellten Lernrate in das vorhandene Profil gemischt. Das Profil liegt dauerhaft im NVS-Flash des ESP32 und wird bei Änderungen mindestens stündlich gesichert. Vor einem Browser-Firmwareupdate wird auch der laufende Viertelstundenblock übernommen und das Profil erneut gespeichert. Anschließend wird die Sicherung vollständig zurückgelesen und geprüft. Ein normales Browserupdate lässt den Lernstand dadurch erhalten. „Lernprofil löschen“, ein vollständiges Löschen des ESP32-Flashs oder eine inkompatible Änderung des Profildatenformats setzt ihn weiterhin zurück.
+Grundlast und wiederkehrende Großlasten werden getrennt gespeichert. Dadurch kann zum Beispiel eine regelmäßig nachmittags auftretende Autoladung mit ihrer bisherigen Wahrscheinlichkeit in die nächste Prognose eingehen. Neue Beobachtungen werden mit der eingestellten Lernrate in das vorhandene Profil gemischt. Für die Ladeprognose werden alle vier Viertelstunden einer Wetterstunde separat ausgewertet; ein Lastsprung kurz nach dem Stundenbeginn geht dadurch nicht mehr verloren. Das Profil liegt dauerhaft im NVS-Flash des ESP32 und wird bei Änderungen mindestens stündlich gesichert. Vor einem Browser-Firmwareupdate wird auch der laufende Viertelstundenblock übernommen und das Profil erneut gespeichert. Anschließend wird die Sicherung vollständig zurückgelesen und geprüft. Ein normales Browserupdate lässt den Lernstand dadurch erhalten. „Lernprofil löschen“, ein vollständiges Löschen des ESP32-Flashs oder eine inkompatible Änderung des Profildatenformats setzt ihn weiterhin zurück.
 
 ### Anlagenverlauf über 31 Tage
 
@@ -146,7 +147,7 @@ Leistungen werden intern mit 10-W-Auflösung und der SOC mit 0,1-Prozent-Auflös
 |---|---|
 | **Wechselrichter** | Zeigt die aktiven Wechselrichter-, Energie- und Netzübergabewerte einschließlich des optionalen Netzstatus 13030. Zusätzlich werden die Einspeisegrenze 13073 in Prozent und der Zustand der Begrenzung 13086 angezeigt. Statusfelder melden WLAN, Modbus-Verbindung, Access Point, Überschuss-Stufen und Rundsteuerung. Das Suchfeld filtert Adresse, Name, Beschreibung und Einheit. |
 | **Batterie** | Zeigt SOC, SOH, Temperatur, Lade-/Entladeleistung, Kapazität und Energiezähler. Direkter SOC/SOH wird über TCP-ID 2 oder RS485-ID 200 gelesen. |
-| **Prognose** | Zeigt Betriebsart, absoluten Batteriestand und freigegebenen SOC, Holding-Werte, erwartete PV-/Last-/Batterieenergie, SOC-Fahrplan, gerasterte Freigabewerte je Uhrzeit sowie stündliche GTI-Werte aller Dachflächen. „Open-Meteo neu laden“ stößt einen neuen Abruf an. |
+| **Prognose** | Zeigt Betriebsart, absoluten Batteriestand und freigegebenen SOC, Holding-Werte, erwartete PV-/Last-/Batterieenergie, SOC-Fahrplan und gerasterte Freigabewerte in 15-Minuten-Auflösung sowie die auf Viertelstunden aufgeteilten stündlichen GTI-Werte aller Dachflächen. „Open-Meteo neu laden“ stößt einen neuen Abruf an. |
 | **Lastprofil** | Zeigt je Wochentag Grundlast, Großlast-Anteil, Erwartungswert, heutige Messung und Ereigniswahrscheinlichkeit in 15-Minuten-Blöcken. „Lernprofil löschen“ setzt alle Lerndaten zurück. |
 | **Verlauf** | Zeigt wahlweise die letzten 24 Stunden, 7 Tage oder 31 Tage für PV, Verbrauch, Einspeisung, Netzbezug, Batterieleistung und direkten Batterie-SOC. Die Kurven lassen sich einzeln ein- und ausblenden. |
 | **Einstellungen** | Enthält WLAN, Modbus, Prognose, Dachflächen, Rundsteuerempfänger, fünf Überschuss-Stufen und optionale Pushover-Benachrichtigungen. „Speichern und neu starten“ legt die Werte dauerhaft ab. |

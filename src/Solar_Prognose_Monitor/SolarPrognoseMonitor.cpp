@@ -45,10 +45,11 @@
   - Betriebsarten: nur TCP, nur RS485 oder TCP plus RS485.
   - Serverlose PV-Prognose mit Open-Meteo und bis zu vier Dachflaechen.
   - Prognosebasiertes Laden ueber Holding-Register 13057 (Max. SOC).
-  - Lokales 15-Minuten-Lastprofil je Wochentag mit stuendlicher NVS-Speicherung.
+  - Lokales 15-Minuten-Lastprofil je Wochentag mit vollstaendiger Viertelstunden-Prognose.
+  - Stuendliche Open-Meteo-Werte werden intern in vier Lastabschnitte zerlegt.
   - Dauerhafter 31-Tage-Anlagenverlauf in LittleFS mit Messpunkten im 5-Minuten-Takt.
   - Drei- oder Vier-Kontakt-Rundsteuerung mit verifizierten Exportlimit-Schreibzugriffen.
-  - Auswaehlbare Pushover-Meldungen fuer Start, Modbus-/Netzausfall und Tagesbericht.
+  - Auswaehlbare Pushover-Meldungen fuer Start, Ausfaelle, Tagesbericht und Updates.
   - Fuer einen RS485-Transceiver sind RX, TX und ein gemeinsamer DE-/RE-Pin konfigurierbar.
   - Es ist keine zusaetzliche Modbus-Bibliothek erforderlich.
   - Der ESP32 startet immer einen eigenen Access Point.
@@ -60,7 +61,7 @@
 */
 
 namespace ConfigDefaults {
-constexpr char FIRMWARE_VERSION[] = "1.1.2";
+constexpr char FIRMWARE_VERSION[] = "1.2.0";
 constexpr char MANUFACTURER[] = "MS-De-sign / Marcus Sonntag";
 constexpr char LICENSE_TEXT[] = "PolyForm Noncommercial License 1.0.0";
 constexpr char PROJECT_URL[] = "https://github.com/MS-De-sign/solar-prognose-monitor";
@@ -91,7 +92,8 @@ constexpr uint32_t RIPPLE_DEBOUNCE_MS = 2000;
 constexpr uint32_t RIPPLE_RETRY_MS = 10000;
 constexpr uint32_t RIPPLE_READ_INTERVAL_MS = 30000;
 constexpr uint8_t MIN_MAX_SOC_PERCENT = 50;
-constexpr uint32_t FORECAST_CONTROL_INTERVAL_MS = 5UL * 60UL * 1000UL;
+constexpr uint32_t FORECAST_CONTROL_RETRY_INTERVAL_MS = 5UL * 60UL * 1000UL;
+constexpr uint32_t FORECAST_SLICE_SECONDS = 15UL * 60UL;
 constexpr uint32_t LOAD_SAMPLE_INTERVAL_MS = 5000;
 constexpr uint32_t PROFILE_PERSIST_INTERVAL_MS = 60UL * 60UL * 1000UL;
 constexpr uint32_t HISTORY_SAMPLE_SECONDS = 5UL * 60UL;
@@ -160,7 +162,8 @@ constexpr size_t SURPLUS_STAGE_COUNT = 5;
 constexpr size_t RIPPLE_INPUT_COUNT = 4;
 constexpr size_t DEBUG_BUFFER_MAX = 12000;
 constexpr size_t PV_ARRAY_COUNT = 4;
-constexpr size_t FORECAST_POINT_COUNT = 48;
+constexpr size_t FORECAST_HOURLY_POINT_COUNT = 48;
+constexpr size_t FORECAST_POINT_COUNT = FORECAST_HOURLY_POINT_COUNT * 4;
 constexpr size_t LOAD_PROFILE_DAYS = 7;
 constexpr size_t LOAD_PROFILE_SLOTS = 96;
 constexpr size_t HISTORY_POINT_COUNT = 288;
@@ -3564,13 +3567,13 @@ bool fetchOpenMeteoArray(size_t arrayIndex, bool initializeTimes) {
   }
 
   const int hourlyObject = json.indexOf("\"hourly\":");
-  double values[FORECAST_POINT_COUNT];
+  double values[FORECAST_HOURLY_POINT_COUNT];
   if (initializeTimes) {
     double offset = 0.0;
     jsonNumber(json, "utc_offset_seconds", offset);
     forecast.utcOffsetSeconds = static_cast<int32_t>(offset);
     jsonString(json, "timezone", forecast.timezoneName);
-    const size_t timeCount = jsonNumberArray(json, "time", values, FORECAST_POINT_COUNT, hourlyObject);
+    const size_t timeCount = jsonNumberArray(json, "time", values, FORECAST_HOURLY_POINT_COUNT, hourlyObject);
     if (timeCount == 0) {
       forecast.status = "Keine Zeitreihe in Open-Meteo-Antwort";
       return false;
@@ -3583,7 +3586,7 @@ bool fetchOpenMeteoArray(size_t arrayIndex, bool initializeTimes) {
   }
 
   const size_t gtiCount = jsonNumberArray(json, "global_tilted_irradiance", values,
-                                           min<size_t>(FORECAST_POINT_COUNT, forecast.pointCount), hourlyObject);
+                                           min<size_t>(FORECAST_HOURLY_POINT_COUNT, forecast.pointCount), hourlyObject);
   if (gtiCount != forecast.pointCount) {
     forecast.status = "Unvollständige Einstrahlungswerte für " + array.name;
     return false;
@@ -3592,6 +3595,22 @@ bool fetchOpenMeteoArray(size_t arrayIndex, bool initializeTimes) {
     forecast.points[i].gti[arrayIndex] = static_cast<uint16_t>(constrain(values[i], 0.0, 2000.0));
   }
   return true;
+}
+
+void expandHourlyForecastToQuarterHours() {
+  const size_t hourlyCount = min<size_t>(forecast.pointCount, FORECAST_HOURLY_POINT_COUNT);
+  // Rueckwaerts kopieren, damit die noch benoetigten Stundenwerte beim
+  // Aufspreizen innerhalb desselben Arrays nicht ueberschrieben werden.
+  for (int hour = static_cast<int>(hourlyCount) - 1; hour >= 0; --hour) {
+    const ForecastPoint hourly = forecast.points[hour];
+    const size_t firstQuarter = static_cast<size_t>(hour) * 4U;
+    for (size_t quarter = 0; quarter < 4; ++quarter) {
+      forecast.points[firstQuarter + quarter] = hourly;
+      forecast.points[firstQuarter + quarter].epoch = hourly.epoch
+          + static_cast<time_t>(quarter * ConfigDefaults::FORECAST_SLICE_SECONDS);
+    }
+  }
+  forecast.pointCount = static_cast<uint8_t>(hourlyCount * 4U);
 }
 
 float overlappingHours(time_t intervalStart, time_t intervalEnd,
@@ -3617,6 +3636,7 @@ void calculateForecastPlan() {
   forecast.totalPvKwh = 0.0f;
   forecast.totalLearnedLoadKwh = 0.0f;
   forecast.totalBatteryEnergyKwh = 0.0f;
+  const float sliceHours = ConfigDefaults::FORECAST_SLICE_SECONDS / 3600.0f;
 
   for (size_t i = 0; i < forecast.pointCount; ++i) {
     ForecastPoint &point = forecast.points[i];
@@ -3627,15 +3647,17 @@ void calculateForecastPlan() {
                   * (config.pvSystemEfficiencyPercent / 100.0f);
     }
     point.learnedLoadKw = expectedLoadWatts(point.epoch) / 1000.0f;
-    point.batteryEnergyKwh = max(0.0f, point.pvKw - point.learnedLoadKw)
-                           * (config.batteryChargeEfficiencyPercent / 100.0f)
-                           * (config.forecastSafetyPercent / 100.0f);
-    const float includedHours = overlappingHours(point.epoch, point.epoch + 3600,
+    const float batteryPowerKw = max(0.0f, point.pvKw - point.learnedLoadKw)
+                               * (config.batteryChargeEfficiencyPercent / 100.0f)
+                               * (config.forecastSafetyPercent / 100.0f);
+    point.batteryEnergyKwh = batteryPowerKw * sliceHours;
+    const float includedHours = overlappingHours(
+        point.epoch, point.epoch + ConfigDefaults::FORECAST_SLICE_SECONDS,
                                                   planStart, forecast.finishAt);
     if (includedHours > 0.0f) {
       forecast.totalPvKwh += point.pvKw * includedHours;
       forecast.totalLearnedLoadKwh += point.learnedLoadKw * includedHours;
-      forecast.totalBatteryEnergyKwh += point.batteryEnergyKwh * includedHours;
+      forecast.totalBatteryEnergyKwh += batteryPowerKw * includedHours;
     }
   }
 
@@ -3665,20 +3687,24 @@ void calculateForecastPlan() {
   float cumulative = 0.0f;
   for (size_t i = 0; i < forecast.pointCount; ++i) {
     ForecastPoint &point = forecast.points[i];
-    // Der Kurvenwert gehoert zum auf der X-Achse gezeigten Stundenbeginn.
+    // Der Kurvenwert gehoert zum auf der X-Achse gezeigten Viertelstundenbeginn.
     // Deshalb wird erst der SOC berechnet und danach die Energie dieser
-    // Stunde zum naechsten Punkt addiert.
+    // Viertelstunde zum naechsten Punkt addiert.
     calculateSocAtEnergy(cumulative, point.plannedSoc, point.reachableSoc);
-    cumulative += point.batteryEnergyKwh
-        * overlappingHours(point.epoch, point.epoch + 3600, planStart, forecast.finishAt);
+    const float includedHours = overlappingHours(
+        point.epoch, point.epoch + ConfigDefaults::FORECAST_SLICE_SECONDS,
+        planStart, forecast.finishAt);
+    cumulative += point.batteryEnergyKwh * (includedHours / sliceHours);
   }
 
   float cumulativeUntilNow = 0.0f;
   const time_t progressEnd = now < forecast.finishAt ? now : forecast.finishAt;
   for (size_t i = 0; i < forecast.pointCount; ++i) {
     const ForecastPoint &point = forecast.points[i];
-    cumulativeUntilNow += point.batteryEnergyKwh
-        * overlappingHours(point.epoch, point.epoch + 3600, planStart, progressEnd);
+    const float includedHours = overlappingHours(
+        point.epoch, point.epoch + ConfigDefaults::FORECAST_SLICE_SECONDS,
+        planStart, progressEnd);
+    cumulativeUntilNow += point.batteryEnergyKwh * (includedHours / sliceHours);
   }
   calculateSocAtEnergy(cumulativeUntilNow, forecast.plannedSoc, forecast.reachableSoc);
 }
@@ -3715,6 +3741,7 @@ bool fetchOpenMeteoForecast() {
     first = false;
     delay(0);
   }
+  expandHourlyForecastToQuarterHours();
   forecast.valid = true;
   forecast.fetching = false;
   forecast.fetchedAt = time(nullptr);
@@ -3726,7 +3753,7 @@ bool fetchOpenMeteoForecast() {
     forecast.status = "Wetter aktuell; absoluter Batteriestand 10743 fehlt";
   }
   nextForecastFetchAt = millis() + static_cast<uint32_t>(config.forecastFetchHours) * 60UL * 60UL * 1000UL;
-  debugPrintf("Open-Meteo: %u Stunden, PV %.1f kWh, Last %.1f kWh, Akku verfügbar %.1f kWh.\n",
+  debugPrintf("Open-Meteo: %u Viertelstunden, PV %.1f kWh, Last %.1f kWh, Akku verfügbar %.1f kWh.\n",
               forecast.pointCount, forecast.totalPvKwh, forecast.totalLearnedLoadKwh, forecast.totalBatteryEnergyKwh);
   return true;
 }
@@ -3843,13 +3870,31 @@ uint16_t desiredMaxSocRaw() {
   return static_cast<uint16_t>(lroundf(desired * 10.0f));
 }
 
+void scheduleNextForecastControl(bool retry = false) {
+  if (retry || !clockIsValid() || !config.forecastEnabled || config.forecastBypass) {
+    nextForecastControlAt = millis() + ConfigDefaults::FORECAST_CONTROL_RETRY_INTERVAL_MS;
+    return;
+  }
+
+  const time_t now = time(nullptr);
+  uint32_t secondsUntilControl = ConfigDefaults::FORECAST_SLICE_SECONDS
+      - static_cast<uint32_t>(now % ConfigDefaults::FORECAST_SLICE_SECONDS);
+  // Das eingestellte Ladeende darf nicht erst an der darauffolgenden
+  // Viertelstundengrenze bemerkt werden.
+  if (forecast.finishAt > now) {
+    const uint32_t secondsUntilFinish = static_cast<uint32_t>(forecast.finishAt - now);
+    secondsUntilControl = min(secondsUntilControl, secondsUntilFinish);
+  }
+  nextForecastControlAt = millis() + max<uint32_t>(1U, secondsUntilControl) * 1000UL;
+}
+
 void serviceForecastCharging() {
   if (!config.forecastEnabled && !forecastRestorePending) return;
   if (config.forecastEnabled && timeReached(nextForecastFetchAt) && WiFi.status() == WL_CONNECTED && clockIsValid()) {
     fetchOpenMeteoForecast();
   }
   if (!timeReached(nextForecastControlAt) || pollingCycleActive) return;
-  nextForecastControlAt = millis() + ConfigDefaults::FORECAST_CONTROL_INTERVAL_MS;
+  scheduleNextForecastControl();
 
   tm parts = {};
   if (clockIsValid() && localCalendar(time(nullptr), parts) && parts.tm_yday != maxSocWriteYearDay) {
@@ -3861,6 +3906,7 @@ void serviceForecastCharging() {
   if (!readSocHoldingRegisters()) {
     forecast.status = "Holding-Register nicht lesbar: " + lastTransactionError;
     debugPrintln(forecast.status);
+    scheduleNextForecastControl(true);
     return;
   }
   const bool forecastRequested = config.forecastEnabled && !config.forecastBypass && forecastIsFresh();
@@ -3940,6 +3986,7 @@ void serviceForecastCharging() {
   } else {
     forecast.status = "Max-SOC-Schreiben fehlgeschlagen: " + lastTransactionError;
     debugPrintln(forecast.status);
+    scheduleNextForecastControl(true);
   }
 }
 
