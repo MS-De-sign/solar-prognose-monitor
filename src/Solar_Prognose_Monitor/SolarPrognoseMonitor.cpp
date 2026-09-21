@@ -506,6 +506,7 @@ static_assert(REGISTER_COUNT == 153, "Die Registerliste muss genau 153 Eintraege
 RegisterDef registers[] = {
   REG16(5007, "Inside Temperature", "Temperatur im Wechselrichter", "°C", ValueType::S16, 0.1f, 0.0f, 1),
   REG32(5016, "Total DC Power", "PV-Leistung aktuell", "W", ValueType::U32_WORD_SWAPPED, 1.0f, 0.0f, 0),
+  REG16(5035, "Grid Frequency", "Netzfrequenz", "Hz", ValueType::U16, 0.1f, 0.0f, 1),
   METER32(5746, "DTSU666 import energy", "Smart Meter Netzbezug gesamt", "kWh", ValueType::U32_WORD_SWAPPED, 0.01f, 0.0f, 2),
   METER32(5748, "DTSU666 export energy", "Smart Meter Netzeinspeisung gesamt", "kWh", ValueType::U32_WORD_SWAPPED, 0.01f, 0.0f, 2),
   REG16(13001, "Daily PV Generation", "PV-Erzeugung heute", "kWh", ValueType::U16, 0.1f, 0.0f, 1),
@@ -535,7 +536,7 @@ RegisterDef registers[] = {
 #undef METER32
 
 constexpr size_t REGISTER_COUNT = sizeof(registers) / sizeof(registers[0]);
-static_assert(REGISTER_COUNT == 20, "Die kompakte Registerliste muss genau 20 Eintraege enthalten.");
+static_assert(REGISTER_COUNT == 21, "Die kompakte Registerliste muss genau 21 Eintraege enthalten.");
 
 struct ReadBlock {
   SourceGroup source;
@@ -548,6 +549,9 @@ struct ReadBlock {
 const ReadBlock readBlocks[] = {
   {SourceGroup::INVERTER, 5007, 1, false},
   {SourceGroup::INVERTER, 5016, 2, false},
+  // Herstellerregister 5036 (nullbasiert 5035). Optional, weil die
+  // Registerbelegung bei einzelnen Baureihen abweichen kann.
+  {SourceGroup::INVERTER, 5035, 1, true},
   {SourceGroup::METER, 5746, 2, true},
   {SourceGroup::METER, 5748, 2, true},
   {SourceGroup::INVERTER, 13001, 13, false},
@@ -1216,6 +1220,59 @@ void observePushoverModbusState(bool healthy) {
   }
 }
 
+enum class GridAvailability : uint8_t {
+  UNKNOWN,
+  AVAILABLE,
+  UNAVAILABLE
+};
+
+GridAvailability evaluateGridAvailability(String *evidence = nullptr) {
+  RegisterDef *gridState = nullptr;
+  RegisterDef *gridFrequency = nullptr;
+  for (size_t i = 0; i < REGISTER_COUNT; ++i) {
+    if (registers[i].source != SourceGroup::INVERTER) continue;
+    if (registers[i].address == 13029) gridState = &registers[i];
+    if (registers[i].address == 5035) gridFrequency = &registers[i];
+  }
+
+  const uint32_t maximumAgeMs = max<uint32_t>(30000UL,
+      static_cast<uint32_t>(config.pollSeconds) * 2000UL + 5000UL);
+  const auto isFresh = [maximumAgeMs](const RegisterDef *reg) {
+    return reg != nullptr && reg->valid && reg->updatedAt != 0
+        && millis() - reg->updatedAt <= maximumAgeMs;
+  };
+
+  // Der eindeutige Herstellerstatus hat Vorrang, sofern das jeweilige Modell
+  // ihn bereitstellt.
+  if (isFresh(gridState)) {
+    const uint16_t raw = static_cast<uint16_t>(gridState->value);
+    if (raw == 0x0055) {
+      if (evidence != nullptr) *evidence = "Grid state 13030 = 0x55";
+      return GridAvailability::AVAILABLE;
+    }
+    if (raw == 0x00AA) {
+      if (evidence != nullptr) *evidence = "Grid state 13030 = 0xAA";
+      return GridAvailability::UNAVAILABLE;
+    }
+  }
+
+  // Rueckfall fuer Wechselrichter, die Grid state nicht anbieten: Register
+  // 5036 wird im nullbasierten Sketch als 5035 gelesen und liefert 0,1 Hz.
+  // 45..65 Hz deckt 50- und 60-Hz-Netze ab. Ein Inselwechselrichter kann am
+  // Ersatzstromausgang weiterhin Nennfrequenz erzeugen; dies ist daher nur
+  // eine Plausibilitaetserkennung und kein Ersatz fuer einen Netzschutz.
+  if (isFresh(gridFrequency)) {
+    const float hz = static_cast<float>(gridFrequency->value);
+    if (evidence != nullptr) *evidence = "Netzfrequenz 5036 = " + String(hz, 1) + " Hz";
+    return hz >= 45.0f && hz <= 65.0f
+        ? GridAvailability::AVAILABLE
+        : GridAvailability::UNAVAILABLE;
+  }
+
+  if (evidence != nullptr) *evidence = "kein aktueller Netzstatus oder Frequenzwert";
+  return GridAvailability::UNKNOWN;
+}
+
 void observePushoverGridState() {
   if (!config.pushoverNotifyGrid) {
     cancelPendingPushoverEvent(PushoverEvent::GRID_OUTAGE);
@@ -1227,22 +1284,11 @@ void observePushoverGridState() {
     return;
   }
 
-  RegisterDef *gridState = nullptr;
-  for (size_t i = 0; i < REGISTER_COUNT; ++i) {
-    if (registers[i].source == SourceGroup::INVERTER && registers[i].address == 13029) {
-      gridState = &registers[i];
-      break;
-    }
-  }
-  const uint32_t maximumAgeMs = max<uint32_t>(30000UL,
-      static_cast<uint32_t>(config.pollSeconds) * 2000UL + 5000UL);
-  if (gridState == nullptr || !gridState->valid || gridState->updatedAt == 0
-      || millis() - gridState->updatedAt > maximumAgeMs) return;
-
-  const uint16_t raw = static_cast<uint16_t>(gridState->value);
-  if (raw != 0x0055 && raw != 0x00AA) return;
+  String evidence;
+  const GridAvailability availability = evaluateGridAvailability(&evidence);
+  if (availability == GridAvailability::UNKNOWN) return;
   const uint32_t now = millis();
-  if (raw == 0x0055) {
+  if (availability == GridAvailability::AVAILABLE) {
     pushoverGridFailureSince = 0;
     if (!pushoverGridOutageActive) return;
     if (pendingPushoverEvent == PushoverEvent::GRID_OUTAGE && !pushoverGridOutageDelivered) {
@@ -1260,7 +1306,7 @@ void observePushoverGridState() {
   if (!pushoverGridOutageDelivered && pendingPushoverEvent == PushoverEvent::NONE) {
     const String message = "Der Wechselrichter meldet seit mindestens "
         + String(config.pushoverFailureDelaySeconds)
-        + " Sekunden Inselbetrieb/Netzausfall (Grid state 13030 = 0xAA).";
+        + " Sekunden einen möglichen Inselbetrieb/Netzausfall (" + evidence + ").";
     queuePushoverEvent(PushoverEvent::GRID_OUTAGE,
                        "Solar Prognose Monitor: Stromnetz ausgefallen", message);
   }
@@ -1329,9 +1375,11 @@ void servicePushover() {
 
   if (pendingPushoverEvent == PushoverEvent::NONE && config.pushoverNotifyGrid
       && pushoverGridRecoveryNeeded) {
+    String evidence;
+    evaluateGridAvailability(&evidence);
     queuePushoverEvent(PushoverEvent::GRID_RESTORED,
                        "Solar Prognose Monitor: Stromnetz wieder verfügbar",
-                       "Der Wechselrichter meldet wieder Netzbetrieb (Grid state 13030 = 0x55).");
+                       "Der Wechselrichter meldet wieder Netzbetrieb (" + evidence + ").");
   }
   if (pendingPushoverEvent == PushoverEvent::NONE && config.pushoverNotifyModbus
       && pushoverRecoveryNeeded) {
@@ -4632,9 +4680,7 @@ void serviceForecastCharging() {
 }
 
 bool tariffGridIsAvailable() {
-  RegisterDef *grid = findRegister(SourceGroup::INVERTER, 13029);
-  return registerIsFresh(grid, 30000UL)
-      && static_cast<uint16_t>(grid->value) == 0x0055;
+  return evaluateGridAvailability() == GridAvailability::AVAILABLE;
 }
 
 void persistTariffChargeState(bool active) {
@@ -4676,7 +4722,13 @@ bool stopTariffGridCharge(const String &reason) {
 
 bool startTariffGridCharge() {
   if (!readGridChargeLimits() || !tariffGridIsAvailable()) {
-    if (!tariffGridIsAvailable()) tariff.status = "Automatik gesperrt: kein sicherer On-grid-Status";
+    String evidence;
+    const GridAvailability availability = evaluateGridAvailability(&evidence);
+    if (availability == GridAvailability::UNAVAILABLE) {
+      tariff.status = "Automatik gesperrt: Stromnetz nicht verfügbar (" + evidence + ")";
+    } else if (availability == GridAvailability::UNKNOWN) {
+      tariff.status = "Automatik gesperrt: Netzstatus nicht sicher feststellbar";
+    }
     return false;
   }
   const float soc = currentBatterySoc();
@@ -5088,7 +5140,7 @@ void handleSettings() {
   if (config.pushoverDailyBattery) part += F(" checked");
   part += F("> Ladestufe des Speichers (absoluter Batteriestand, Register 10743)</label><label class='check full'><input type='checkbox' name='poUpdate' value='1'");
   if (config.pushoverNotifyUpdate) part += F(" checked");
-  part += F("> Neue Firmwareversion auf GitHub verfügbar</label></div></div></details></div><div class='full'><p class='hint'>Die Versionsprüfung fragt höchstens einmal täglich das neueste öffentliche GitHub-Release ab und meldet jede neue Version genau einmal. Es wird keine Firmware automatisch installiert. Die Ausfallverzögerung gilt sowohl für den Modbus- als auch für den gemeldeten Netzausfall. Der Netzstatus wird über Sungrow Grid state 13030 ausgewertet; unterstützt ein Gerät dieses Register nicht, bleibt nur diese Meldungsart ohne Funktion.</p><label class='check'><input type='checkbox' name='poClear' value='1'> Gespeicherte Pushover-Zugangsdaten löschen</label></div><div class='full'><button id='poTest' class='button secondary' type='button'>Testnachricht senden</button><span id='poResult' class='result'>");
+  part += F("> Neue Firmwareversion auf GitHub verfügbar</label></div></div></details></div><div class='full'><p class='hint'>Die Versionsprüfung fragt höchstens einmal täglich das neueste öffentliche GitHub-Release ab und meldet jede neue Version genau einmal. Es wird keine Firmware automatisch installiert. Die Ausfallverzögerung gilt sowohl für den Modbus- als auch für den gemeldeten Netzausfall. Bevorzugt wird Sungrow Grid state 13030 ausgewertet. Ist dieses Register nicht verfügbar, dient die Netzfrequenz 5036 als Rückfallwert: unter 45 Hz oder über 65 Hz gilt als möglicher Netzausfall. Diese Plausibilitätsprüfung ersetzt keinen Netzschutz und muss bei Anlagen mit Inselbetrieb praktisch geprüft werden.</p><label class='check'><input type='checkbox' name='poClear' value='1'> Gespeicherte Pushover-Zugangsdaten löschen</label></div><div class='full'><button id='poTest' class='button secondary' type='button'>Testnachricht senden</button><span id='poResult' class='result'>");
   part += htmlEscape(lastPushoverStatus);
   part += F("</span><p class='hint'>Die Testnachricht verwendet neue Eingaben direkt, ohne sie zu speichern; leere Felder verwenden bereits gespeicherte Zugangsdaten. Die Verbindung zu Pushover wird per HTTPS mit Zertifikatsprüfung aufgebaut. Ist ESP32, Router oder Internet stromlos, kann keine Sofortmeldung versendet werden; nach dem Neustart folgt die Startmeldung.</p></div></div></section><button class='button' type='submit'>Speichern und neu starten</button></form><section class='card info'><h2>Verbindung</h2><b>Access Point:</b> ");
   part += htmlEscape(accessPointSsid);

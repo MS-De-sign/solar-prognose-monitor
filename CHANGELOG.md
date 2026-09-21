@@ -2,6 +2,10 @@
 
 ## Unveröffentlicht
 
+- ergänzt Netzfrequenz 5036 (nullbasiert 5035, Faktor 0,1 Hz) als optionalen Rückfallwert, wenn `Grid state` 13030 nicht lesbar ist
+- wertet eine frische Frequenz von 45 bis 65 Hz als plausiblen Netzbetrieb und Werte außerhalb dieses Bereichs als möglichen Netzausfall; fehlende oder veraltete Werte bleiben sicherheitshalber unbekannt
+- verwendet dieselbe Netzprüfung für Pushover und die Sperrkette der dynamischen Netzladung und dokumentiert die notwendige Praxisprüfung bei Inselanlagen
+
 ## 1.3.0 – 2026-09-21
 
 - ergänzt den Tab **Stromtarif** und eine zweistufige Steuerung für dynamische Tarife: zunächst reine Planung, automatische Netzladung nur nach einer separaten ausdrücklichen Freigabe

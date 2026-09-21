@@ -45,6 +45,7 @@ Das Suchfeld filtert die Tabelle nach Adresse, englischem Namen, deutscher Besch
 |---:|---|---|
 | 5007 | Inside Temperature | Temperatur im Wechselrichter in °C. |
 | 5016 | Total DC Power | Momentane gesamte PV-Leistung in W. |
+| 5035 | Grid Frequency | Netzfrequenz aus Herstellerregister 5036 in Hz. Optionaler Rückfallwert für den Netzstatus. |
 | 5746 | DTSU666 import energy | Gesamter Netzbezug des Smart Meters in kWh. Das Register wird optional über die feste Unit-ID 254 gelesen; ein Fehler beeinflusst die übrige Abfrage nicht. |
 | 5748 | DTSU666 export energy | Gesamte Netzeinspeisung des Smart Meters in kWh, ebenfalls optional über Unit-ID 254. |
 | 13001 | Daily PV Generation | PV-Erzeugung des aktuellen Tages in kWh. |
@@ -274,7 +275,7 @@ Die eigene API muss `{"prices":[{"start":UNIX-Sekunden,"end":UNIX-Sekunden,"pric
 | Nachrichten auswählen | Ausklappbereich mit einzelnen Schaltern für Start, Modbus, Netzstatus, neue Firmware sowie beide Werte des Tagesberichts. |
 | Start oder Neustart | Meldet den erfolgreichen Start, sobald WLAN, Internet und gültige Uhrzeit verfügbar sind. |
 | Modbus-Ausfall und Wiederherstellung | Meldet eine anhaltend fehlende Wechselrichterantwort und die erste erfolgreiche Abfrage danach. |
-| Stromnetzausfall und Netzwiederkehr | Wertet `Grid state` 13030 aus: `0xAA` gilt als Inselbetrieb/Netzausfall, `0x55` als Netzbetrieb. |
+| Stromnetzausfall und Netzwiederkehr | Bevorzugt `Grid state` 13030 (`0xAA` Ausfall, `0x55` Netzbetrieb). Fehlt der Wert, dient die Netzfrequenz 5036 als Rückfall: außerhalb von 45 bis 65 Hz gilt als möglicher Ausfall. |
 | PV-Strom des Tages | Nimmt den PV-Tagesertrag 13001 in den einmaligen Sonnenuntergangsbericht auf. |
 | Ladestufe des Speichers | Nimmt den absoluten Batteriestand 10743 bei Sonnenuntergang in den Tagesbericht auf. |
 | Neue Firmwareversion | Prüft höchstens einmal täglich das neueste veröffentlichte GitHub-Release und meldet eine numerisch höhere Version genau einmal. |
@@ -288,11 +289,11 @@ Je nach Auswahl werden gemeldet:
 - Start oder Neustart des ESP32, sobald Heim-WLAN, Internet und eine per NTP gültige Uhrzeit verfügbar sind,
 - ein länger als die eingestellte Verzögerung bestehender Ausfall der Wechselrichter-Modbusabfrage,
 - die erste erfolgreiche Modbusabfrage nach einem bereits gemeldeten Ausfall,
-- Inselbetrieb/Netzausfall und die Rückkehr in den Netzbetrieb über Sungrow `Grid state`,
+- Inselbetrieb/Netzausfall und die Rückkehr in den Netzbetrieb über Sungrow `Grid state` oder ersatzweise die Netzfrequenz,
 - einmal nach dem von Open-Meteo gelieferten Sonnenuntergang ein gemeinsamer Tagesbericht mit den ausgewählten Werten,
 - eine neu veröffentlichte stabile Firmwareversion mit installierter Version, neuer Version und Link zum GitHub-Release.
 
-Das Datum eines erfolgreich übertragenen Tagesberichts wird im dauerhaften Einstellungsspeicher abgelegt. Dadurch führt ein ESP32-Neustart am selben Abend nicht zu einem zweiten Bericht. Fehlt ein ausgewählter Messwert zum Sendezeitpunkt, nennt der Bericht ihn als „nicht verfügbar“. Unterstützt der Wechselrichter `Grid state` nicht, wird nur dieser optionale Block übersprungen; die übrige Modbusabfrage bleibt funktionsfähig.
+Das Datum eines erfolgreich übertragenen Tagesberichts wird im dauerhaften Einstellungsspeicher abgelegt. Dadurch führt ein ESP32-Neustart am selben Abend nicht zu einem zweiten Bericht. Fehlt ein ausgewählter Messwert zum Sendezeitpunkt, nennt der Bericht ihn als „nicht verfügbar“. Unterstützt der Wechselrichter `Grid state` nicht, wird nur dieser optionale Block übersprungen und die Netzfrequenz als Rückfallwert versucht; die übrige Modbusabfrage bleibt funktionsfähig. Da ein Wechselrichter am Ersatzstromausgang auch im Inselbetrieb weiterhin 50 Hz erzeugen kann, muss die Frequenzreaktion bei einer kontrollierten Netztrennung für das konkrete Modell geprüft werden. Die Auswertung ersetzt keinen zertifizierten Netzschutz.
 
 Die Versionsprüfung verwendet den öffentlichen GitHub-Endpunkt für das neueste Release und benötigt deshalb keinen im ESP32 gespeicherten GitHub-Token. Die Versionsbestandteile werden numerisch verglichen. Die zuletzt erfolgreich gemeldete neue Version bleibt im NVS gespeichert, damit Neustarts keine Wiederholungsmeldung erzeugen. GitHub- oder Internetfehler lösen keine falsche Update-Meldung aus; die automatische Prüfung wird später wiederholt. Es findet niemals eine automatische Installation statt.
 
