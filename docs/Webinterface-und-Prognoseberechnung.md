@@ -127,7 +127,22 @@ Mindest-SOC zum Erreichen des Max-SOC = Max-SOC
 
 Der berechnete Mindest-SOC wird anschließend auf **0 % bis Max-SOC** begrenzt. Ein Wert von 0 % bedeutet, dass die verbleibende prognostizierte Nettoenergie selbst bei leerem Akku noch zum Max-SOC reichen würde. Eine erwartete Entladung reduziert die restliche Nettoenergie und kann den Mindest-SOC schon vor dem bekannten Verbraucher anheben. Ist die verbleibende Bilanz negativ, wird der Max-SOC vorsorglich vollständig freigegeben.
 
-Als Sollwert nimmt die Regelung den höheren der beiden Werte. Zusätzlich gilt:
+Bei **Ideal laden** nimmt die Regelung den höheren der beiden Werte. Bei **Vorausladen** kommt eine dritte, zeitabhängige Untergrenze hinzu:
+
+```text
+Mitte = Sonnenaufgang + (Ladeende − Sonnenaufgang) / 2
+
+Vorauslade-SOC bis zur Mitte
+  = 50 % + (min(80 %, Max-SOC) − 50 %) × verstrichener Zeitanteil
+
+Vorauslade-SOC nach der Mitte
+  = min(80 %, Max-SOC)
+    + (Max-SOC − min(80 %, Max-SOC)) × verbleibender Zeitanteil
+```
+
+Damit sind bis zur Mitte des nutzbaren PV-Zeitraums mindestens 80 % freigegeben. Danach steigt die Untergrenze langsam bis zum konfigurierten Max-SOC am Ladeende. Ist der Max-SOC kleiner als 80 %, wird stattdessen dieser Wert bis zur Mitte erreicht. Der wirksame Sollwert ist immer das Maximum aus Energieplan, Mindest-SOC zum Erreichen des Max-SOC und – nur bei Vorausladen – dieser zeitlichen Untergrenze. Vorausladen kann fehlende PV-Energie nicht ersetzen und gibt keine feste Ladeleistung vor.
+
+Zusätzlich gilt für beide Strategien:
 
 - niemals unter 50 %,
 - niemals über dem eingestellten Max-SOC,
@@ -135,7 +150,7 @@ Als Sollwert nimmt die Regelung den höheren der beiden Werte. Zusätzlich gilt:
 - anschließend niemals unter dem aktuellen direkten SOC, ohne diesen Istwert auf die nächste Stufe aufzurunden,
 - Beachtung von Mindestabstand und der automatisch ausreichend großen Tagesgrenze der Schreibzugriffe.
 
-Damit folgt die Freigabe ausschließlich der Prognosezeit: Bei 3 % Schrittweite entstehen die Grenzen 50, 53, 56 … 100 %. Erreicht der Akku beispielsweise die freigegebenen 56 %, bleibt diese Grenze bestehen und die Ladung pausiert. Erst wenn der zeitliche Fahrplan die nächste Stufe erreicht, werden 59 % freigegeben. Der Ist-SOC kann keine weitere Stufe auslösen; er verhindert nur einen Sollwert unterhalb eines bereits erreichten Batteriestands.
+Damit folgt die Freigabe ausschließlich dem gewählten Prognosefahrplan: Bei 3 % Schrittweite entstehen die Grenzen 50, 53, 56 … 100 %. Erreicht der Akku beispielsweise die freigegebenen 56 %, bleibt diese Grenze bestehen und die Ladung pausiert. Erst wenn der zeitliche Fahrplan die nächste Stufe erreicht, werden 59 % freigegeben. Der Ist-SOC kann keine weitere Stufe auslösen; er verhindert nur einen Sollwert unterhalb eines bereits erreichten Batteriestands.
 
 Umgekehrt wird eine wegen Bewölkung verpasste Stufe nicht abgewartet. Ist der zeitliche Fahrplan bereits bei 69 %, darf direkt 69 % geschrieben werden, auch wenn Akku oder vorherige Freigabe noch unter 66 % liegen. So kann die Batterie nach einer Unterbrechung wieder aufholen. Die 3 % beschreiben daher das Fahrplanraster und nicht zwingend die maximale Differenz eines einzelnen Schreibtelegramms.
 
@@ -209,6 +224,7 @@ RX, TX, DE/RE, aktive Stufen und Rundsteuer-Eingänge dürfen keinen GPIO doppel
 | Einstellung | Bedeutung |
 |---|---|
 | Betriebsart | **Prognose** regelt den Max-SOC laufend; **Bypass** schreibt den eingestellten Max-SOC genau einmal. |
+| Ladestrategie | **Ideal laden** verwendet unverändert den energie- und lastabhängigen Prognosefahrplan. **Vorausladen** gibt als zusätzliche Untergrenze bis zur Hälfte des nutzbaren PV-Zeitraums mindestens 80 % frei und verteilt den Rest bis zum Ladeende. Die Auswahl wirkt nur im Prognosebetrieb. |
 | Breiten-/Längengrad | Standort für Wetter, Sonnenaufgang und Sonnenuntergang. |
 | Max-SOC | Einziges Tagesziel im Bereich 50–100 %. |
 | Fertig vor Sonnenuntergang | Verschiebt das geplante Ladeende um diese Minuten vor den Sonnenuntergang. |

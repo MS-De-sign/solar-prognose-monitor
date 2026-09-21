@@ -4,6 +4,9 @@
 
 ## 1.2.0 – unveröffentlicht
 
+- ergänzt unter Einstellungen die Ladestrategien **Ideal laden** und **Vorausladen**
+- lässt **Ideal laden** unverändert energie- und lastabhängig arbeiten; **Vorausladen** gibt bis zur zeitlichen Mitte des nutzbaren PV-Fensters mindestens 80 % und anschließend den Rest bis zum geplanten Ladeende frei
+- kombiniert den vorsichtigeren Vorauslade-Zeitplan mit den bestehenden Prognose-, Lastprofil- und Erreichbarkeitsberechnungen, wobei stets die höhere sichere SOC-Freigabe gilt
 - zerlegt jede stündliche Open-Meteo-Prognose intern in vier Viertelstunden
 - verrechnet in jeder Viertelstunde den tatsächlich zu diesem Zeitpunkt gelernten Lastprofilwert statt nur den Wert am Stundenanfang
 - berücksichtigt dadurch Lastsprünge um `:15`, `:30` und `:45` vollständig in PV-, Last-, Batterieenergie- und SOC-Fahrplan

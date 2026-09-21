@@ -483,6 +483,7 @@ struct AppConfig {
   uint8_t rs485DePin;
   bool forecastEnabled;
   bool forecastBypass;
+  uint8_t chargingStrategy;
   float latitude;
   float longitude;
   uint8_t maxSoc;
@@ -520,6 +521,11 @@ enum class ModbusMode : uint8_t {
   TCP_ONLY,
   RTU_ONLY,
   TCP_WITH_RTU_FALLBACK
+};
+
+enum class ChargingStrategy : uint8_t {
+  IDEAL,
+  ADVANCE
 };
 
 enum class ApiMethod : uint8_t {
@@ -1395,6 +1401,7 @@ void setDefaultStage(size_t index) {
 void setDefaultForecastConfig() {
   config.forecastEnabled = false;
   config.forecastBypass = true;
+  config.chargingStrategy = static_cast<uint8_t>(ChargingStrategy::IDEAL);
   config.latitude = 0.0f;
   config.longitude = 0.0f;
   config.maxSoc = 100;
@@ -1433,6 +1440,9 @@ void sanitizeForecastConfig() {
   if (!isfinite(config.latitude) || config.latitude < -90.0f || config.latitude > 90.0f) config.latitude = 0.0f;
   if (!isfinite(config.longitude) || config.longitude < -180.0f || config.longitude > 180.0f) config.longitude = 0.0f;
   config.maxSoc = constrain(config.maxSoc, ConfigDefaults::MIN_MAX_SOC_PERCENT, 100);
+  config.chargingStrategy = constrain(config.chargingStrategy,
+                                      static_cast<uint8_t>(ChargingStrategy::IDEAL),
+                                      static_cast<uint8_t>(ChargingStrategy::ADVANCE));
   config.finishBufferMinutes = constrain(config.finishBufferMinutes, 0, 360);
   config.forecastSafetyPercent = constrain(config.forecastSafetyPercent, 40, 100);
   config.pvSystemEfficiencyPercent = constrain(config.pvSystemEfficiencyPercent, 40, 100);
@@ -1576,6 +1586,7 @@ void loadConfig() {
   lastNotifiedReleaseVersion = preferences.getString("polastver", "");
   config.forecastEnabled = preferences.getBool("fcen", config.forecastEnabled);
   config.forecastBypass = preferences.getBool("fcbypass", config.forecastBypass);
+  config.chargingStrategy = preferences.getUChar("fcstrategy", config.chargingStrategy);
   config.latitude = preferences.getFloat("lat", config.latitude);
   config.longitude = preferences.getFloat("lon", config.longitude);
   if (preferences.isKey("maxsoc")) {
@@ -1729,6 +1740,7 @@ void saveConfig() {
   preferences.putString("polastver", lastNotifiedReleaseVersion);
   preferences.putBool("fcen", config.forecastEnabled);
   preferences.putBool("fcbypass", config.forecastBypass);
+  preferences.putUChar("fcstrategy", config.chargingStrategy);
   preferences.putFloat("lat", config.latitude);
   preferences.putFloat("lon", config.longitude);
   preferences.putUChar("maxsoc", config.maxSoc);
@@ -3630,6 +3642,33 @@ float overlappingHours(time_t intervalStart, time_t intervalEnd,
       : 0.0f;
 }
 
+float advanceChargingSocAt(time_t epoch) {
+  const float minimumSoc = static_cast<float>(ConfigDefaults::MIN_MAX_SOC_PERCENT);
+  const float targetSoc = static_cast<float>(config.maxSoc);
+  if (config.chargingStrategy != static_cast<uint8_t>(ChargingStrategy::ADVANCE)
+      || forecast.finishAt <= forecast.sunrise) {
+    return minimumSoc;
+  }
+
+  // Die vorsichtige Strategie gibt bis zur zeitlichen Mitte des nutzbaren
+  // PV-Fensters mindestens 80 % frei. Danach wird der verbleibende Bereich
+  // gleichmaessig bis zum eingestellten Ladeende freigegeben.
+  const float middleTargetSoc = min(80.0f, targetSoc);
+  const time_t middle = forecast.sunrise + (forecast.finishAt - forecast.sunrise) / 2;
+  if (epoch <= forecast.sunrise) return minimumSoc;
+  if (epoch >= forecast.finishAt) return targetSoc;
+  if (epoch <= middle) {
+    const float progress = static_cast<float>(epoch - forecast.sunrise)
+        / static_cast<float>(max<time_t>(1, middle - forecast.sunrise));
+    return minimumSoc + (middleTargetSoc - minimumSoc) * constrain(progress, 0.0f, 1.0f);
+  }
+  if (targetSoc <= middleTargetSoc) return targetSoc;
+  const float progress = static_cast<float>(epoch - middle)
+      / static_cast<float>(max<time_t>(1, forecast.finishAt - middle));
+  return middleTargetSoc
+      + (targetSoc - middleTargetSoc) * constrain(progress, 0.0f, 1.0f);
+}
+
 void calculateForecastPlan() {
   const float capacityKwh = configuredBatteryCapacityKwh();
   const float soc = currentBatterySoc();
@@ -3714,6 +3753,7 @@ void calculateForecastPlan() {
     // Deshalb wird erst der SOC berechnet und danach die Energie dieser
     // Viertelstunde zum naechsten Punkt addiert.
     calculateSocAtEnergy(cumulativeCharge, cumulativeNet, point.plannedSoc, point.reachableSoc);
+    point.plannedSoc = max(point.plannedSoc, advanceChargingSocAt(point.epoch));
     const float includedHours = overlappingHours(
         point.epoch, point.epoch + ConfigDefaults::FORECAST_SLICE_SECONDS,
         planStart, forecast.finishAt);
@@ -3736,6 +3776,7 @@ void calculateForecastPlan() {
   }
   calculateSocAtEnergy(cumulativeChargeUntilNow, cumulativeNetUntilNow,
                        forecast.plannedSoc, forecast.reachableSoc);
+  forecast.plannedSoc = max(forecast.plannedSoc, advanceChargingSocAt(now));
 }
 
 bool fetchOpenMeteoForecast() {
@@ -4115,7 +4156,11 @@ void handleSettings() {
   if (config.forecastEnabled && !config.forecastBypass) part += F(" selected");
   part += F(">Prognose aktiv</option><option value='0'");
   if (!config.forecastEnabled || config.forecastBypass) part += F(" selected");
-  part += F(">Bypass aktiv – Max-SOC einmalig freigeben</option></select><p class='hint'>Beim Wechsel auf Bypass wird der eingestellte Max-SOC genau einmal geschrieben und durch Rücklesen geprüft. Danach erfolgen keine weiteren Max-SOC-Schreibzugriffe; spätere Änderungen über die Sungrow-App bleiben bestehen. Erst ein erneuter Wechsel auf Bypass oder eine Änderung des eingestellten Max-SOC erzeugt einen neuen Einmalauftrag.</p></div><div class='caution full'><b>Wichtig bei Wartung und Inbetriebnahme:</b> Vor Wartungs-, Service-, Umbau- oder Inbetriebnahmearbeiten an Wechselrichter oder Batteriesystem auf Bypass umschalten und speichern. Besonders wichtig ist dies bei Batterieerweiterungen, weil das System zur Angleichung automatisch bis ungefähr 40 % laden oder entladen kann. Prognose erst nach vollständig abgeschlossenen und durch den Fachbetrieb freigegebenen Arbeiten wieder aktivieren. Hersteller- und Fachbetriebsvorgaben haben Vorrang.</div><label>Breitengrad<input name='lat' type='number' step='0.000001' min='-90' max='90' value='");
+  part += F(">Bypass aktiv – Max-SOC einmalig freigeben</option></select><p class='hint'>Beim Wechsel auf Bypass wird der eingestellte Max-SOC genau einmal geschrieben und durch Rücklesen geprüft. Danach erfolgen keine weiteren Max-SOC-Schreibzugriffe; spätere Änderungen über die Sungrow-App bleiben bestehen. Erst ein erneuter Wechsel auf Bypass oder eine Änderung des eingestellten Max-SOC erzeugt einen neuen Einmalauftrag.</p></div><div class='full'><label for='fcstrategy'>Ladestrategie</label><select id='fcstrategy' name='fcstrategy'><option value='0'");
+  if (config.chargingStrategy == static_cast<uint8_t>(ChargingStrategy::IDEAL)) part += F(" selected");
+  part += F(">Ideal laden</option><option value='1'");
+  if (config.chargingStrategy == static_cast<uint8_t>(ChargingStrategy::ADVANCE)) part += F(" selected");
+  part += F(">Vorausladen – 80 % bis zur Mitte</option></select><p class='hint'><b>Ideal laden</b> nutzt den bisherigen energie- und lastabhängigen Fahrplan. <b>Vorausladen</b> gibt bis zur Hälfte des nutzbaren PV-Zeitraums mindestens 80 % frei und verteilt die letzten 20 % bis zum geplanten Ladeende. Das ist vorsichtiger bei wechselnden oder noch nicht gut gelernten Lasten. Die Auswahl wirkt nur bei aktiver Prognose.</p></div><div class='caution full'><b>Wichtig bei Wartung und Inbetriebnahme:</b> Vor Wartungs-, Service-, Umbau- oder Inbetriebnahmearbeiten an Wechselrichter oder Batteriesystem auf Bypass umschalten und speichern. Besonders wichtig ist dies bei Batterieerweiterungen, weil das System zur Angleichung automatisch bis ungefähr 40 % laden oder entladen kann. Prognose erst nach vollständig abgeschlossenen und durch den Fachbetrieb freigegebenen Arbeiten wieder aktivieren. Hersteller- und Fachbetriebsvorgaben haben Vorrang.</div><label>Breitengrad<input name='lat' type='number' step='0.000001' min='-90' max='90' value='");
   part += String(config.latitude, 6);
   part += F("'></label><label>Längengrad<input name='lon' type='number' step='0.000001' min='-180' max='180' value='");
   part += String(config.longitude, 6);
@@ -4409,6 +4454,10 @@ void handleSave() {
   const uint8_t forecastMode = static_cast<uint8_t>(boundedNumberArgument("forecastMode", 0, 0, 1));
   config.forecastEnabled = true;
   config.forecastBypass = forecastMode == 0;
+  config.chargingStrategy = static_cast<uint8_t>(boundedNumberArgument(
+      "fcstrategy", static_cast<uint8_t>(ChargingStrategy::IDEAL),
+      static_cast<uint8_t>(ChargingStrategy::IDEAL),
+      static_cast<uint8_t>(ChargingStrategy::ADVANCE)));
   config.latitude = boundedFloatArgument("lat", config.latitude, -90.0f, 90.0f);
   config.longitude = boundedFloatArgument("lon", config.longitude, -180.0f, 180.0f);
   config.maxSoc = static_cast<uint8_t>(boundedNumberArgument(
@@ -4670,7 +4719,7 @@ const char FORECAST_HTML[] PROGMEM = R"HTML(
 let state=null;const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=(n,d=1)=>Number.isFinite(Number(n))?Number(n).toFixed(d):'—';
 const draw=(canvas,series,colors,labels,epochs,minValue=0,maxValue=null,markers=[])=>{const dpr=devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;canvas.width=w*dpr;canvas.height=h*dpr;const c=canvas.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);const all=series.flatMap(x=>x.values).filter(Number.isFinite),min=minValue===null?Math.min(0,...all):minValue,max=maxValue??Math.max(min+1,...all),n=series[0]?.values.length||0,left=42,right=10,top=30,bottom=52,plotW=w-left-right,plotH=h-top-bottom;c.strokeStyle='#dfe4e8';c.fillStyle='#64717d';c.font='11px system-ui';c.textAlign='left';for(let i=0;i<=4;i++){const y=top+plotH*i/4;c.beginPath();c.moveTo(left,y);c.lineTo(w-right,y);c.stroke();c.fillText(fmt(max-(max-min)*i/4,0),2,y+4)}const maxTicks=w<520?4:7,step=Math.max(1,Math.ceil(Math.max(1,n-1)/(maxTicks-1))),ticks=[];for(let i=0;i<n;i+=step)ticks.push(i);if(n&&ticks[ticks.length-1]!==n-1)ticks.push(n-1);ticks.forEach(i=>{const x=left+plotW*(n<2?0:i/(n-1)),parts=String(labels[i]||'').split(' ');c.strokeStyle='#edf0f2';c.beginPath();c.moveTo(x,top);c.lineTo(x,top+plotH);c.stroke();c.fillStyle='#64717d';c.textAlign=i===0?'left':i===n-1?'right':'center';c.fillText(parts[0]||'',x,top+plotH+17);c.fillText(parts.slice(1).join(' '),x,top+plotH+31)});c.textAlign='left';series.forEach((s,j)=>{c.strokeStyle=colors[j];c.lineWidth=2;c.beginPath();let started=false;s.values.forEach((v,i)=>{if(!Number.isFinite(v))return;const x=left+plotW*(n<2?0:i/(n-1)),y=top+plotH-(v-min)/(max-min)*plotH;started?c.lineTo(x,y):c.moveTo(x,y);started=true});c.stroke()});if(n>1&&epochs.length===n){const first=Number(epochs[0]),last=Number(epochs[n-1]);markers.forEach((m,j)=>{const epoch=Number(m.epoch);if(!Number.isFinite(epoch)||epoch<first||epoch>last||last<=first)return;const x=left+plotW*(epoch-first)/(last-first);c.save();c.strokeStyle=m.color||'#b42318';c.fillStyle=m.color||'#b42318';c.setLineDash([5,4]);c.beginPath();c.moveTo(x,top);c.lineTo(x,top+plotH);c.stroke();c.setLineDash([]);c.fillText(m.label,x+4,top+12+j*13);c.restore()})}series.forEach((s,j)=>{c.fillStyle=colors[j];c.fillRect(left+j*150,8,12,3);c.fillText(s.name,left+18+j*150,13)})};
-const render=d=>{state=d;const s=d.status,klass=s.fresh&&!s.bypass?'ok':(s.bypass?'muted':'bad'),labels=d.points.map(x=>x.time),epochs=d.points.map(x=>x.epoch),now={epoch:Math.floor(Date.now()/1000),label:'Jetzt',color:'#b42318'},goal={epoch:s.finishEpoch,label:'Ziel',color:'#6b4f9b'};document.querySelector('#metrics').innerHTML=`<section class="card metric"><span class="muted">Steuerung</span><b class="${klass}">${s.enabled?(s.bypass?'Bypass':'Prognose'):'Aus'}</b><small>${esc(s.text)}</small></section><section class="card metric"><span class="muted">Absoluter Batteriestand / freigegebener SOC</span><b>${fmt(s.currentSoc)} / ${fmt(s.holdingMaxSoc)} %</b><small>Quelle: 10743 · ${esc(s.socTransport)} · Fahrplan-Soll: ${fmt(s.requestedSoc)} %, Min: ${fmt(s.holdingMinSoc)} %</small></section><section class="card metric"><span class="muted">PV / gelernte Last</span><b>${fmt(s.totalPv)} / ${fmt(s.totalLoad)} kWh</b><small>Akku netto: ${fmt(s.batteryEnergy)} kWh · Laden: ${fmt(s.batteryCharge)} kWh · erwartete Entladung: ${fmt(s.batteryDischarge)} kWh</small></section><section class="card metric"><span class="muted">Prognoseplan / min. Batteriestand zum Erreichen des Max-SOC</span><b>${fmt(s.plannedSoc)} / ${fmt(s.reachableSoc)} %</b><small>Fertig bis ${esc(s.finish)} · Regelwrites ${s.writes}/${s.maxWrites} · Sonderwrites ${s.priorityWrites}</small></section>`;draw(document.querySelector('#energy'),[{name:'PV kW',values:d.points.map(x=>x.pv)},{name:'Last kW',values:d.points.map(x=>x.load)},{name:'Akku kWh (+/−)',values:d.points.map(x=>x.battery)}],['#087f5b','#d97706','#2673c9'],labels,epochs,null,null,[now]);draw(document.querySelector('#soc'),[{name:'Plan %',values:d.points.map(x=>x.plan)},{name:'Min. für Max-SOC %',values:d.points.map(x=>x.reach)},{name:'Freigabe %',values:d.points.map(x=>x.release)}],['#087f5b','#2673c9','#d97706'],labels,epochs,0,100,[now,goal]);document.querySelector('#head').innerHTML='<tr><th>Zeit</th><th>PV kW</th><th>Last kW</th><th>Akku kWh (+ Laden / − Entladen)</th><th>Plan %</th><th>Min. %</th><th>Freigabe %</th>'+d.arrays.map(a=>`<th>${esc(a.name)} W/m²</th>`).join('')+'</tr>';document.querySelector('#rows').innerHTML=d.points.map(p=>`<tr><td>${esc(p.time)}</td><td>${fmt(p.pv,2)}</td><td>${fmt(p.load,2)}</td><td>${fmt(p.battery,2)}</td><td>${fmt(p.plan)}</td><td>${fmt(p.reach)}</td><td>${fmt(p.release)}</td>${p.gti.map(x=>`<td>${x}</td>`).join('')}</tr>`).join('')};
+const render=d=>{state=d;const s=d.status,klass=s.fresh&&!s.bypass?'ok':(s.bypass?'muted':'bad'),labels=d.points.map(x=>x.time),epochs=d.points.map(x=>x.epoch),now={epoch:Math.floor(Date.now()/1000),label:'Jetzt',color:'#b42318'},goal={epoch:s.finishEpoch,label:'Ziel',color:'#6b4f9b'};document.querySelector('#metrics').innerHTML=`<section class="card metric"><span class="muted">Steuerung</span><b class="${klass}">${s.enabled?(s.bypass?'Bypass':'Prognose'):'Aus'}</b><small>${s.bypass?'Einmalige Freigabe':esc(s.strategy)} · ${esc(s.text)}</small></section><section class="card metric"><span class="muted">Absoluter Batteriestand / freigegebener SOC</span><b>${fmt(s.currentSoc)} / ${fmt(s.holdingMaxSoc)} %</b><small>Quelle: 10743 · ${esc(s.socTransport)} · Fahrplan-Soll: ${fmt(s.requestedSoc)} %, Min: ${fmt(s.holdingMinSoc)} %</small></section><section class="card metric"><span class="muted">PV / gelernte Last</span><b>${fmt(s.totalPv)} / ${fmt(s.totalLoad)} kWh</b><small>Akku netto: ${fmt(s.batteryEnergy)} kWh · Laden: ${fmt(s.batteryCharge)} kWh · erwartete Entladung: ${fmt(s.batteryDischarge)} kWh</small></section><section class="card metric"><span class="muted">Prognoseplan / min. Batteriestand zum Erreichen des Max-SOC</span><b>${fmt(s.plannedSoc)} / ${fmt(s.reachableSoc)} %</b><small>Fertig bis ${esc(s.finish)} · Regelwrites ${s.writes}/${s.maxWrites} · Sonderwrites ${s.priorityWrites}</small></section>`;draw(document.querySelector('#energy'),[{name:'PV kW',values:d.points.map(x=>x.pv)},{name:'Last kW',values:d.points.map(x=>x.load)},{name:'Akku kWh (+/−)',values:d.points.map(x=>x.battery)}],['#087f5b','#d97706','#2673c9'],labels,epochs,null,null,[now]);draw(document.querySelector('#soc'),[{name:'Plan %',values:d.points.map(x=>x.plan)},{name:'Min. für Max-SOC %',values:d.points.map(x=>x.reach)},{name:'Freigabe %',values:d.points.map(x=>x.release)}],['#087f5b','#2673c9','#d97706'],labels,epochs,0,100,[now,goal]);document.querySelector('#head').innerHTML='<tr><th>Zeit</th><th>PV kW</th><th>Last kW</th><th>Akku kWh (+ Laden / − Entladen)</th><th>Plan %</th><th>Min. %</th><th>Freigabe %</th>'+d.arrays.map(a=>`<th>${esc(a.name)} W/m²</th>`).join('')+'</tr>';document.querySelector('#rows').innerHTML=d.points.map(p=>`<tr><td>${esc(p.time)}</td><td>${fmt(p.pv,2)}</td><td>${fmt(p.load,2)}</td><td>${fmt(p.battery,2)}</td><td>${fmt(p.plan)}</td><td>${fmt(p.reach)}</td><td>${fmt(p.release)}</td>${p.gti.map(x=>`<td>${x}</td>`).join('')}</tr>`).join('')};
 const load=async()=>{try{const r=await fetch('/api/forecast',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);render(await r.json())}catch(e){document.querySelector('#message').textContent='Fehler: '+e.message}};document.querySelector('#refresh').addEventListener('click',async()=>{await fetch('/api/forecast/refresh',{method:'POST'});document.querySelector('#message').textContent='Abruf eingeplant …';setTimeout(load,1200)});load();setInterval(load,10000);addEventListener('resize',()=>state&&render(state));
 </script></body></html>
 )HTML";
@@ -4729,6 +4778,10 @@ void handleForecastApi() {
   out.reserve(1700);
   out = F("{\"status\":{\"enabled\":"); out += config.forecastEnabled ? F("true") : F("false");
   out += F(",\"bypass\":"); out += config.forecastBypass ? F("true") : F("false");
+  out += F(",\"strategy\":\"");
+  out += config.chargingStrategy == static_cast<uint8_t>(ChargingStrategy::ADVANCE)
+      ? F("Vorausladen") : F("Ideal laden");
+  out += '"';
   out += F(",\"valid\":"); out += forecast.valid ? F("true") : F("false");
   out += F(",\"fresh\":"); out += forecastIsFresh() ? F("true") : F("false");
   out += F(",\"text\":\""); out += jsonEscape(forecast.status); out += F("\",\"timezone\":\""); out += jsonEscape(forecast.timezoneName);

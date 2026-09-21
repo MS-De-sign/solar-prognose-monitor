@@ -94,7 +94,7 @@ Die Betriebsart wird hier nur angezeigt. Umschalten ist ausschließlich unter **
 
 | Karte/Zeile | Bedeutung |
 |---|---|
-| Steuerung | Zeigt **Prognose** oder **Bypass** sowie den aktuellen Regelstatus, etwa Wetterabruf, fehlenden SOC oder erfolgreichen Schreibvorgang. |
+| Steuerung | Zeigt **Prognose** oder **Bypass**, bei aktiver Prognose die gewählte Strategie **Ideal laden** oder **Vorausladen** sowie den aktuellen Regelstatus, etwa Wetterabruf, fehlenden SOC oder erfolgreichen Schreibvorgang. |
 | Absoluter Batteriestand / freigegebener SOC | Links steht der absolute Batteriestand 10743, rechts der tatsächlich zurückgelesene Max-SOC des Wechselrichters. Darunter stehen Transportweg, zeitbasiertes Fahrplan-Soll und Min-SOC. |
 | PV / gelernte Last | Erwartete PV-Energie und erwarteter Hausverbrauch im betrachteten Zeitraum. Darunter stehen erwartete Ladung, erwartete Entladung und die daraus gebildete Netto-Batterieenergie. |
 | Prognoseplan / min. Batteriestand zum Erreichen des Max-SOC | Zwei unabhängig berechnete SOC-Untergrenzen. Der zweite Wert zeigt, wie hoch der Batteriestand jetzt mindestens sein müsste, damit die verbleibende prognostizierte Energie noch zum eingestellten Max-SOC führt. Der höhere Wert bestimmt die nächste Freigabe. Angezeigt werden außerdem Ladeende, normale Regelwrites samt Tageslimit und Sonderwrites. |
@@ -174,6 +174,7 @@ Der Verlauf schreibt alle fünf Minuten einen kompakten Messpunkt in eine Tagesd
 | Feld | Wirkung |
 |---|---|
 | Betriebsart | **Prognose aktiv** hebt Max-SOC schrittweise an. **Bypass aktiv** schreibt den eingestellten Max-SOC einmal, liest ihn zurück und sendet ihn danach nicht regelmäßig erneut. |
+| Ladestrategie | **Ideal laden** behält den bisherigen energie- und lastabhängigen Fahrplan bei. **Vorausladen** setzt zusätzlich eine vorsichtige Zeituntergrenze: mindestens 80 % bis zur Mitte zwischen Sonnenaufgang und geplantem Ladeende, danach langsamer Anstieg bis zum Max-SOC. Sinnvoll bei stark wechselnden oder noch schlecht gelernten Lasten. Wirkt nur bei aktiver Prognose. |
 | Breitengrad / Längengrad | Standort für Open-Meteo sowie Sonnenauf- und -untergang. |
 | Max-SOC | Einziger SOC-Zielwert, zulässig 50 bis 100 %. Im Bypass sofortige, in der Prognose schrittweise Freigabe. |
 | Fertig vor Sonnenuntergang | Anzahl Minuten, um die der Akku vor dem berechneten Sonnenuntergang fertig sein soll. |
@@ -380,11 +381,24 @@ Mindest-SOC zum Erreichen des Max-SOC
     − restliche Netto-Batterieenergie [kWh]
       / Batteriekapazität [kWh] × 100
 
-vorläufiger Soll-SOC
+vorläufiger Soll-SOC bei Ideal laden
   = max(Plan-SOC, Mindest-SOC zum Erreichen des Max-SOC)
 ```
 
 Der Mindest-SOC zum Erreichen des Max-SOC wird auf 0 % bis Max-SOC begrenzt. Ein rechnerisch negativer Rohwert zeigt nur an, dass die verbleibende prognostizierte Energie selbst bei leerem Akku genügen würde; ausgegeben wird dann 0 %.
+
+Bei **Vorausladen** kommt eine dritte Untergrenze hinzu. Vom Sonnenaufgang bis zur Mitte des nutzbaren PV-Zeitraums steigt sie linear von 50 % auf mindestens 80 %. Von dort bis zum geplanten Ladeende steigt sie linear von 80 % auf den eingestellten Max-SOC. Liegt der Max-SOC unter 80 %, wird bereits dieser Wert bis zur Mitte freigegeben und anschließend gehalten.
+
+```text
+Mitte = Sonnenaufgang + (Ladeende − Sonnenaufgang) / 2
+
+vorläufiger Soll-SOC bei Vorausladen
+  = max(Plan-SOC,
+        Mindest-SOC zum Erreichen des Max-SOC,
+        zeitabhängiger Vorauslade-SOC)
+```
+
+Die übrige Prognose bleibt vollständig aktiv. Erkennt sie wegen schlechterem Wetter oder einer wiederkehrenden Last einen noch höheren erforderlichen SOC, hat dieser höhere Wert Vorrang. Die Strategie gibt nur eine SOC-Obergrenze frei; sie kann weder eine nicht vorhandene PV-Leistung ersetzen noch eine feste Ladeleistung erzwingen.
 
 Der vorläufige Fahrplanwert wird danach:
 
