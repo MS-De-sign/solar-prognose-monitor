@@ -61,7 +61,7 @@
 */
 
 namespace ConfigDefaults {
-constexpr char FIRMWARE_VERSION[] = "1.3.1";
+constexpr char FIRMWARE_VERSION[] = "1.3.2";
 constexpr char MANUFACTURER[] = "MS-De-sign / Marcus Sonntag";
 constexpr char LICENSE_TEXT[] = "PolyForm Noncommercial License 1.0.0";
 constexpr char PROJECT_URL[] = "https://github.com/MS-De-sign/solar-prognose-monitor";
@@ -523,6 +523,7 @@ RegisterDef registers[] = {
   BREG16(13024, "Battery temperature", "Batterietemperatur", "°C", ValueType::S16, 0.1f, 0.0f, 1),
   REG16(13029, "Grid state", "Netzstatus", "", ValueType::U16, 1.0f, 0.0f, 0),
   BREG16(13038, "Battery capacity", "Batteriekapazität", "kWh", ValueType::U16, 0.01f, 0.0f, 1),
+  REG32(13051, "Grid-side fault", "Netzfehler", "", ValueType::U32_WORD_SWAPPED, 1.0f, 0.0f, 0),
   BAT200_16(10743, "Battery1 SOC", "Absoluter Batteriestand", "%", ValueType::U16, 0.1f, 0.0f, 1),
   BAT200_16(10744, "Battery1 SOH", "Batterie SOH aus Batteriedaten", "%", ValueType::U16, 1.0f, 0.0f, 0)
 };
@@ -536,7 +537,7 @@ RegisterDef registers[] = {
 #undef METER32
 
 constexpr size_t REGISTER_COUNT = sizeof(registers) / sizeof(registers[0]);
-static_assert(REGISTER_COUNT == 21, "Die kompakte Registerliste muss genau 21 Eintraege enthalten.");
+static_assert(REGISTER_COUNT == 22, "Die kompakte Registerliste muss genau 22 Eintraege enthalten.");
 
 struct ReadBlock {
   SourceGroup source;
@@ -560,6 +561,9 @@ const ReadBlock readBlocks[] = {
   // Ausnahme 0x02 deaktiviert nur diesen Block, nicht den gesamten Zyklus.
   {SourceGroup::INVERTER, 13029, 1, true},
   {SourceGroup::INVERTER, 13038, 1, false},
+  // Herstellerregister 13052-13053 (nullbasiert 13051-13052). Bit 8
+  // bezeichnet explizit "Grid Power Outage". Optional je nach Firmware.
+  {SourceGroup::INVERTER, 13051, 2, true},
   {SourceGroup::BATTERY, 10743, 2, false}
 };
 constexpr size_t READ_BLOCK_COUNT = sizeof(readBlocks) / sizeof(readBlocks[0]);
@@ -1229,10 +1233,12 @@ enum class GridAvailability : uint8_t {
 GridAvailability evaluateGridAvailability(String *evidence = nullptr) {
   RegisterDef *gridState = nullptr;
   RegisterDef *gridFrequency = nullptr;
+  RegisterDef *gridFault = nullptr;
   for (size_t i = 0; i < REGISTER_COUNT; ++i) {
     if (registers[i].source != SourceGroup::INVERTER) continue;
     if (registers[i].address == 13029) gridState = &registers[i];
     if (registers[i].address == 5035) gridFrequency = &registers[i];
+    if (registers[i].address == 13051) gridFault = &registers[i];
   }
 
   const uint32_t maximumAgeMs = max<uint32_t>(30000UL,
@@ -1256,20 +1262,38 @@ GridAvailability evaluateGridAvailability(String *evidence = nullptr) {
     }
   }
 
-  // Rueckfall fuer Wechselrichter, die Grid state nicht anbieten: Register
-  // 5036 wird im nullbasierten Sketch als 5035 gelesen und liefert 0,01 Hz.
-  // 45..65 Hz deckt 50- und 60-Hz-Netze ab. Ein Inselwechselrichter kann am
-  // Ersatzstromausgang weiterhin Nennfrequenz erzeugen; dies ist daher nur
-  // eine Plausibilitaetserkennung und kein Ersatz fuer einen Netzschutz.
-  if (isFresh(gridFrequency)) {
-    const float hz = static_cast<float>(gridFrequency->value);
-    if (evidence != nullptr) *evidence = "Netzfrequenz 5036 = " + String(hz, 2) + " Hz";
-    return hz >= 45.0f && hz <= 65.0f
-        ? GridAvailability::AVAILABLE
-        : GridAvailability::UNAVAILABLE;
+  // Rueckfall fuer Wechselrichter, die Grid state nicht anbieten: Bit 8 des
+  // 32-Bit-Fehlerworts 13052-13053 meldet ausdruecklich "Grid Power Outage".
+  constexpr uint32_t GRID_POWER_OUTAGE_MASK = 1UL << 8;
+  const bool faultFresh = isFresh(gridFault);
+  const uint32_t faultRaw = faultFresh ? static_cast<uint32_t>(gridFault->value) : 0;
+  if (faultFresh && (faultRaw & GRID_POWER_OUTAGE_MASK) != 0) {
+    if (evidence != nullptr) *evidence = "Grid-side fault 13052 Bit 8 gesetzt";
+    return GridAvailability::UNAVAILABLE;
   }
 
-  if (evidence != nullptr) *evidence = "kein aktueller Netzstatus oder Frequenzwert";
+  // Die Frequenz bestaetigt die Rueckkehr des Netzes erst gemeinsam mit einem
+  // frischen, geloeschten Outage-Bit. 45..65 Hz deckt 50- und 60-Hz-Netze ab.
+  // Ein unplausibler Frequenzwert bleibt auch bei geloeschtem Bit ein Ausfall.
+  if (isFresh(gridFrequency)) {
+    const float hz = static_cast<float>(gridFrequency->value);
+    const bool frequencyPlausible = hz >= 45.0f && hz <= 65.0f;
+    if (!frequencyPlausible) {
+      if (evidence != nullptr) *evidence = "Netzfrequenz 5036 = " + String(hz, 2) + " Hz";
+      return GridAvailability::UNAVAILABLE;
+    }
+    if (faultFresh) {
+      if (evidence != nullptr) {
+        *evidence = "Grid-side fault 13052 Bit 8 gelöscht, Netzfrequenz "
+                  + String(hz, 2) + " Hz";
+      }
+      return GridAvailability::AVAILABLE;
+    }
+  }
+
+  if (evidence != nullptr) {
+    *evidence = "Grid state, Grid-side fault oder Netzfrequenz nicht vollständig aktuell";
+  }
   return GridAvailability::UNKNOWN;
 }
 
@@ -2894,6 +2918,14 @@ String formattedValue(const RegisterDef &reg) {
     char unknown[24];
     snprintf(unknown, sizeof(unknown), "Unbekannt (0x%04X)", raw);
     return String(unknown);
+  }
+  if (reg.source == SourceGroup::INVERTER && reg.address == 13051) {
+    const uint32_t raw = static_cast<uint32_t>(reg.value);
+    char result[64];
+    snprintf(result, sizeof(result), "%s (0x%08lX)",
+             (raw & (1UL << 8)) != 0 ? "Netzausfall-Bit gesetzt" : "Netzausfall-Bit nicht gesetzt",
+             static_cast<unsigned long>(raw));
+    return String(result);
   }
   return String(reg.value, static_cast<unsigned int>(reg.decimals));
 }
@@ -5140,7 +5172,7 @@ void handleSettings() {
   if (config.pushoverDailyBattery) part += F(" checked");
   part += F("> Ladestufe des Speichers (absoluter Batteriestand, Register 10743)</label><label class='check full'><input type='checkbox' name='poUpdate' value='1'");
   if (config.pushoverNotifyUpdate) part += F(" checked");
-  part += F("> Neue Firmwareversion auf GitHub verfügbar</label></div></div></details></div><div class='full'><p class='hint'>Die Versionsprüfung fragt höchstens einmal täglich das neueste öffentliche GitHub-Release ab und meldet jede neue Version genau einmal. Es wird keine Firmware automatisch installiert. Die Ausfallverzögerung gilt sowohl für den Modbus- als auch für den gemeldeten Netzausfall. Bevorzugt wird Sungrow Grid state 13030 ausgewertet. Ist dieses Register nicht verfügbar, dient die Netzfrequenz 5036 als Rückfallwert: unter 45 Hz oder über 65 Hz gilt als möglicher Netzausfall. Diese Plausibilitätsprüfung ersetzt keinen Netzschutz und muss bei Anlagen mit Inselbetrieb praktisch geprüft werden.</p><label class='check'><input type='checkbox' name='poClear' value='1'> Gespeicherte Pushover-Zugangsdaten löschen</label></div><div class='full'><button id='poTest' class='button secondary' type='button'>Testnachricht senden</button><span id='poResult' class='result'>");
+  part += F("> Neue Firmwareversion auf GitHub verfügbar</label></div></div></details></div><div class='full'><p class='hint'>Die Versionsprüfung fragt höchstens einmal täglich das neueste öffentliche GitHub-Release ab und meldet jede neue Version genau einmal. Es wird keine Firmware automatisch installiert. Die Ausfallverzögerung gilt sowohl für den Modbus- als auch für den gemeldeten Netzausfall. Bevorzugt wird Sungrow Grid state 13030 ausgewertet. Ist dieses Register nicht verfügbar, meldet Bit 8 von Grid-side fault 13052 einen Netzausfall. Die Netzwiederkehr wird erst bestätigt, wenn dieses Bit gelöscht und die Netzfrequenz 5036 wieder zwischen 45 und 65 Hz liegt. Diese Auswertung ersetzt keinen Netzschutz und muss bei Anlagen mit Inselbetrieb praktisch geprüft werden.</p><label class='check'><input type='checkbox' name='poClear' value='1'> Gespeicherte Pushover-Zugangsdaten löschen</label></div><div class='full'><button id='poTest' class='button secondary' type='button'>Testnachricht senden</button><span id='poResult' class='result'>");
   part += htmlEscape(lastPushoverStatus);
   part += F("</span><p class='hint'>Die Testnachricht verwendet neue Eingaben direkt, ohne sie zu speichern; leere Felder verwenden bereits gespeicherte Zugangsdaten. Die Verbindung zu Pushover wird per HTTPS mit Zertifikatsprüfung aufgebaut. Ist ESP32, Router oder Internet stromlos, kann keine Sofortmeldung versendet werden; nach dem Neustart folgt die Startmeldung.</p></div></div></section><button class='button' type='submit'>Speichern und neu starten</button></form><section class='card info'><h2>Verbindung</h2><b>Access Point:</b> ");
   part += htmlEscape(accessPointSsid);

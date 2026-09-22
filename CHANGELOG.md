@@ -2,6 +2,13 @@
 
 ## Unveröffentlicht
 
+## 1.3.2 – 2026-09-22
+
+- liest das optionale 32-Bit-Inputregister `Grid-side fault` 13052–13053 (nullbasiert 13051–13052) und wertet gezielt Bit 8 „Grid Power Outage“ aus
+- verwendet andere gesetzte Netzfehlerbits nicht fälschlich als allgemeinen Netzausfall
+- bestätigt ohne verfügbares `Grid state` die Netzwiederkehr erst bei gelöschtem Outage-Bit und gleichzeitig plausibler Netzfrequenz zwischen 45 und 65 Hz
+- zeigt das Outage-Bit und den vollständigen Fehlerwert hexadezimal im Wechselrichter-Tab an
+
 ## 1.3.1 – 2026-09-21
 
 - korrigiert die Skalierung der Netzfrequenz 5036 (nullbasiert 5035) von 0,1 auf 0,01 Hz und zeigt den Wert mit zwei Nachkommastellen an

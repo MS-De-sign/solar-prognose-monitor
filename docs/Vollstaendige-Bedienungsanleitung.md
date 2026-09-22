@@ -55,6 +55,7 @@ Das Suchfeld filtert die Tabelle nach Adresse, englischem Namen, deutscher Besch
 | 13007 | Load power | Momentaner Hausverbrauch in W; zugleich Eingangswert für das lernende Lastprofil. |
 | 13009 | Export power | Leistung am Netzanschlusspunkt in W; positive Werte werden als Einspeisung, negative als Netzbezug behandelt. |
 | 13029 | Grid state | Netzstatus aus Herstellerregister 13030: `0x55` Netzbetrieb, `0xAA` Inselbetrieb/Netzausfall. Optional, da nicht jeder Firmwarestand das Register bereitstellt. |
+| 13051 | Grid-side fault | 32-Bit-Netzfehler aus Herstellerregistern 13052–13053. Bit 8 meldet „Grid Power Outage“. Im Webinterface werden Outage-Bit und Rohwert hexadezimal angezeigt. |
 | 13073 | Export Power Limit | Aktuell gelesene maximale Einspeiseleistung. Im Text wird sie anhand der konfigurierten PV-Leistung zusätzlich in Prozent umgerechnet. |
 | 13086 | Export Power Limitation | Zeigt, ob die Wechselrichterbegrenzung eingeschaltet (`0xAA`) oder ausgeschaltet (`0x55`) ist. |
 
@@ -275,7 +276,7 @@ Die eigene API muss `{"prices":[{"start":UNIX-Sekunden,"end":UNIX-Sekunden,"pric
 | Nachrichten auswählen | Ausklappbereich mit einzelnen Schaltern für Start, Modbus, Netzstatus, neue Firmware sowie beide Werte des Tagesberichts. |
 | Start oder Neustart | Meldet den erfolgreichen Start, sobald WLAN, Internet und gültige Uhrzeit verfügbar sind. |
 | Modbus-Ausfall und Wiederherstellung | Meldet eine anhaltend fehlende Wechselrichterantwort und die erste erfolgreiche Abfrage danach. |
-| Stromnetzausfall und Netzwiederkehr | Bevorzugt `Grid state` 13030 (`0xAA` Ausfall, `0x55` Netzbetrieb). Fehlt der Wert, dient die Netzfrequenz 5036 als Rückfall: außerhalb von 45 bis 65 Hz gilt als möglicher Ausfall. |
+| Stromnetzausfall und Netzwiederkehr | Bevorzugt `Grid state` 13030 (`0xAA` Ausfall, `0x55` Netzbetrieb). Fehlt der Wert, meldet Bit 8 von `Grid-side fault` 13052 einen Ausfall. Eine Wiederkehr gilt erst bei gelöschtem Bit und 45 bis 65 Hz Netzfrequenz als bestätigt. |
 | PV-Strom des Tages | Nimmt den PV-Tagesertrag 13001 in den einmaligen Sonnenuntergangsbericht auf. |
 | Ladestufe des Speichers | Nimmt den absoluten Batteriestand 10743 bei Sonnenuntergang in den Tagesbericht auf. |
 | Neue Firmwareversion | Prüft höchstens einmal täglich das neueste veröffentlichte GitHub-Release und meldet eine numerisch höhere Version genau einmal. |
@@ -289,11 +290,11 @@ Je nach Auswahl werden gemeldet:
 - Start oder Neustart des ESP32, sobald Heim-WLAN, Internet und eine per NTP gültige Uhrzeit verfügbar sind,
 - ein länger als die eingestellte Verzögerung bestehender Ausfall der Wechselrichter-Modbusabfrage,
 - die erste erfolgreiche Modbusabfrage nach einem bereits gemeldeten Ausfall,
-- Inselbetrieb/Netzausfall und die Rückkehr in den Netzbetrieb über Sungrow `Grid state` oder ersatzweise die Netzfrequenz,
+- Inselbetrieb/Netzausfall und die Rückkehr in den Netzbetrieb über Sungrow `Grid state` oder ersatzweise `Grid-side fault` Bit 8 zusammen mit der Netzfrequenz,
 - einmal nach dem von Open-Meteo gelieferten Sonnenuntergang ein gemeinsamer Tagesbericht mit den ausgewählten Werten,
 - eine neu veröffentlichte stabile Firmwareversion mit installierter Version, neuer Version und Link zum GitHub-Release.
 
-Das Datum eines erfolgreich übertragenen Tagesberichts wird im dauerhaften Einstellungsspeicher abgelegt. Dadurch führt ein ESP32-Neustart am selben Abend nicht zu einem zweiten Bericht. Fehlt ein ausgewählter Messwert zum Sendezeitpunkt, nennt der Bericht ihn als „nicht verfügbar“. Unterstützt der Wechselrichter `Grid state` nicht, wird nur dieser optionale Block übersprungen und die Netzfrequenz als Rückfallwert versucht; die übrige Modbusabfrage bleibt funktionsfähig. Da ein Wechselrichter am Ersatzstromausgang auch im Inselbetrieb weiterhin 50 Hz erzeugen kann, muss die Frequenzreaktion bei einer kontrollierten Netztrennung für das konkrete Modell geprüft werden. Die Auswertung ersetzt keinen zertifizierten Netzschutz.
+Das Datum eines erfolgreich übertragenen Tagesberichts wird im dauerhaften Einstellungsspeicher abgelegt. Dadurch führt ein ESP32-Neustart am selben Abend nicht zu einem zweiten Bericht. Fehlt ein ausgewählter Messwert zum Sendezeitpunkt, nennt der Bericht ihn als „nicht verfügbar“. Unterstützt der Wechselrichter `Grid state` nicht, werden `Grid-side fault` und Netzfrequenz als gemeinsame Rückfallerkennung verwendet; die übrige Modbusabfrage bleibt bei einem nicht unterstützten optionalen Block funktionsfähig. Ein Wechselrichter kann am Ersatzstromausgang auch im Inselbetrieb weiterhin 50 Hz erzeugen, weshalb die Auswertung von Bit 8 die Frequenz ergänzt. Trotzdem muss das Verhalten bei einer kontrollierten Netztrennung für das konkrete Modell geprüft werden. Die Auswertung ersetzt keinen zertifizierten Netzschutz.
 
 Die Versionsprüfung verwendet den öffentlichen GitHub-Endpunkt für das neueste Release und benötigt deshalb keinen im ESP32 gespeicherten GitHub-Token. Die Versionsbestandteile werden numerisch verglichen. Die zuletzt erfolgreich gemeldete neue Version bleibt im NVS gespeichert, damit Neustarts keine Wiederholungsmeldung erzeugen. GitHub- oder Internetfehler lösen keine falsche Update-Meldung aus; die automatische Prüfung wird später wiederholt. Es findet niemals eine automatische Installation statt.
 
