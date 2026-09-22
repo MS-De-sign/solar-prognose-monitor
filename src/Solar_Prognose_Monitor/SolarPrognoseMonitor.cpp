@@ -4658,6 +4658,12 @@ void serviceForecastCharging() {
   const uint16_t normalDifference = static_cast<uint16_t>(config.socStepPercent) * 10U;
   const bool oneShotWrite = !controlling && forecastRestorePending;
   const bool priorityWrite = oneShotWrite || finalReleaseDue;
+  // Wenn die Schrittweite nicht glatt in den Bereich bis zum konfigurierten
+  // Max-SOC passt (z. B. 50, 65, 80, 95, 100), ist der letzte Restschritt
+  // kleiner als normalDifference. Er muss trotzdem geschrieben werden.
+  const bool finalPartialStep = controlling
+      && desiredRaw == configuredMaxSocRaw
+      && holdingMaxSocRaw < configuredMaxSocRaw;
   if (oneShotWrite && difference == 0) {
     forecastRestorePending = false;
     preferences.begin("sungrow", false);
@@ -4673,7 +4679,7 @@ void serviceForecastCharging() {
     forecast.status = "Tages-Max-SOC war bereits vollständig freigegeben";
     return;
   }
-  if (!priorityWrite && difference < normalDifference) {
+  if (!priorityWrite && !finalPartialStep && difference < normalDifference) {
     forecast.status = "Fahrplan hält die aktuelle SOC-Freigabe; nächste Stufe folgt zeitbasiert";
     return;
   }
@@ -4964,7 +4970,7 @@ void handleSettings() {
   part += String(config.batteryDischargeEfficiencyPercent);
   part += F("'><p class='hint'>Wird verwendet, wenn eine gelernte Last die erwartete PV-Leistung übersteigt. Die Prognose nimmt konservativ an, dass der Speicher die Lücke versorgt. Standard: 95 %.</p></label><label>SOC-Schrittweite (%)<input name='socstep' type='number' min='1' max='20' value='");
   part += String(config.socStepPercent);
-  part += F("'><p class='hint'>Standard: 10 %. Empfohlener Mindestwert: 3 %. Verpasste Fahrplanstufen werden nicht abgewartet; es gilt immer der zur aktuellen Uhrzeit vorgesehene Wert.</p></label><div class='caution full'><b>Achtung bei weniger als 3 %:</b> Kleinere Schritte erzeugen deutlich mehr Schreibzugriffe. Da der Max-SOC dauerhaft im Wechselrichter erhalten bleibt, kann eine zusätzliche Belastung seines nichtflüchtigen Speichers nicht ausgeschlossen werden. Nutzung kleinerer Werte auf eigene Verantwortung.</div><label>Mindestabstand Schreibzugriffe (min)<input name='writemin' type='number' min='5' max='240' value='");
+  part += F("'><p class='hint'>Standard: 10 %. Empfohlener Mindestwert: 3 %. Verpasste Fahrplanstufen werden nicht abgewartet; es gilt immer der zur aktuellen Uhrzeit vorgesehene Wert. Passt die Schrittweite nicht genau bis zum Max-SOC, wird der letzte kleinere Restschritt automatisch freigegeben, zum Beispiel 50, 65, 80, 95, 100 %.</p></label><div class='caution full'><b>Achtung bei weniger als 3 %:</b> Kleinere Schritte erzeugen deutlich mehr Schreibzugriffe. Da der Max-SOC dauerhaft im Wechselrichter erhalten bleibt, kann eine zusätzliche Belastung seines nichtflüchtigen Speichers nicht ausgeschlossen werden. Nutzung kleinerer Werte auf eigene Verantwortung.</div><label>Mindestabstand Schreibzugriffe (min)<input name='writemin' type='number' min='5' max='240' value='");
   part += String(config.minimumWriteMinutes);
   part += F("'></label><label>Gewünschte Schreibobergrenze pro Tag<input name='writemax' type='number' min='1' max='48' value='");
   part += String(config.maximumWritesPerDay);

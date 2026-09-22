@@ -8,6 +8,7 @@
 - verwendet andere gesetzte Netzfehlerbits nicht fälschlich als allgemeinen Netzausfall
 - bestätigt ohne verfügbares `Grid state` die Netzwiederkehr erst bei gelöschtem Outage-Bit und gleichzeitig plausibler Netzfrequenz zwischen 45 und 65 Hz
 - zeigt das Outage-Bit und den vollständigen Fehlerwert hexadezimal im Wechselrichter-Tab an
+- gibt den letzten kleineren SOC-Restschritt bis zum eingestellten Max-SOC frei, wenn die gewählte Schrittweite nicht glatt aufgeht, beispielsweise 50, 65, 80, 95, 100 %
 
 ## 1.3.1 – 2026-09-21
 

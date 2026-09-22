@@ -192,7 +192,7 @@ Der Verlauf schreibt alle fünf Minuten einen kompakten Messpunkt in eine Tagesd
 | PV-Systemwirkungsgrad | Pauschaler Anlagenfaktor für Temperatur, Kabel, Wechselrichter, Verschmutzung, Mismatch und kleinere Verschattung. Nicht mit dem Modulwirkungsgrad verwechseln. Standard: 95 %. |
 | Batterie-Ladewirkungsgrad | Anteil des PV-Überschusses, der als im Akku angekommen gerechnet wird. Standard: 95 %. |
 | Batterie-Entladewirkungsgrad | Berücksichtigt Speicherverluste, wenn eine wiederkehrende Last größer als die erwartete PV-Leistung ist. Standard: 95 %. |
-| SOC-Schrittweite | Raster der Max-SOC-Freigaben, ausgehend von 50 %. Standard sind 10 %, um die Zahl der persistenten Wechselrichter-Schreibzugriffe zu reduzieren. Bei 3 % entstehen beispielsweise 50, 53, 56 … 100 %. Werte unter 3 % erhöhen die Schreibzahl besonders stark. |
+| SOC-Schrittweite | Raster der Max-SOC-Freigaben, ausgehend von 50 %. Standard sind 10 %, um die Zahl der persistenten Wechselrichter-Schreibzugriffe zu reduzieren. Der letzte Restschritt endet immer exakt beim eingestellten Max-SOC; bei 15 % und 100 % Ziel entstehen beispielsweise 50, 65, 80, 95, 100 %. Werte unter 3 % erhöhen die Schreibzahl besonders stark. |
 | Mindestabstand Schreibzugriffe | Mindestzeit zwischen normalen prognosebedingten Änderungen. |
 | Gewünschte Schreibobergrenze pro Tag | Tagesgrenze normaler Regelwrites. Reicht sie nicht aus, um den Bereich von 50 % bis Max-SOC in der gewählten Schrittweite abzudecken, wird sie automatisch auf die notwendige Zahl angehoben. Bypass-, Sicherheits- und abschließende Tagesfreigaben werden separat gezählt und bleiben möglich. Standard: 20. |
 | Open-Meteo-Intervall | Zeit zwischen automatischen Wetterabrufen. |

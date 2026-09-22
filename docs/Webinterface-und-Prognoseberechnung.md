@@ -150,7 +150,7 @@ Zusätzlich gilt für beide Strategien:
 - anschließend niemals unter dem aktuellen direkten SOC, ohne diesen Istwert auf die nächste Stufe aufzurunden,
 - Beachtung von Mindestabstand und der automatisch ausreichend großen Tagesgrenze der Schreibzugriffe.
 
-Damit folgt die Freigabe ausschließlich dem gewählten Prognosefahrplan: Bei 3 % Schrittweite entstehen die Grenzen 50, 53, 56 … 100 %. Erreicht der Akku beispielsweise die freigegebenen 56 %, bleibt diese Grenze bestehen und die Ladung pausiert. Erst wenn der zeitliche Fahrplan die nächste Stufe erreicht, werden 59 % freigegeben. Der Ist-SOC kann keine weitere Stufe auslösen; er verhindert nur einen Sollwert unterhalb eines bereits erreichten Batteriestands.
+Damit folgt die Freigabe ausschließlich dem gewählten Prognosefahrplan: Bei 3 % Schrittweite entstehen die Grenzen 50, 53, 56 … 98, 100 %. Der letzte Restschritt wird immer exakt auf den eingestellten Max-SOC begrenzt; bei 15 % und 100 % Ziel lautet die Folge deshalb 50, 65, 80, 95, 100 %. Erreicht der Akku beispielsweise die freigegebenen 56 %, bleibt diese Grenze bestehen und die Ladung pausiert. Erst wenn der zeitliche Fahrplan die nächste Stufe erreicht, werden 59 % freigegeben. Der Ist-SOC kann keine weitere Stufe auslösen; er verhindert nur einen Sollwert unterhalb eines bereits erreichten Batteriestands.
 
 Umgekehrt wird eine wegen Bewölkung verpasste Stufe nicht abgewartet. Ist der zeitliche Fahrplan bereits bei 69 %, darf direkt 69 % geschrieben werden, auch wenn Akku oder vorherige Freigabe noch unter 66 % liegen. So kann die Batterie nach einer Unterbrechung wieder aufholen. Die 3 % beschreiben daher das Fahrplanraster und nicht zwingend die maximale Differenz eines einzelnen Schreibtelegramms.
 
@@ -232,7 +232,7 @@ RX, TX, DE/RE, aktive Stufen und Rundsteuer-Eingänge dürfen keinen GPIO doppel
 | PV-Systemwirkungsgrad | Pauschaler Minderungsfaktor zwischen Einstrahlung und realer PV-Leistung. |
 | Batterie-Ladewirkungsgrad | Anteil des Überschusses, der als im Akku angekommen gilt. |
 | Batterie-Entladewirkungsgrad | Speicherenergie, die für eine erwartete negative Leistungsbilanz benötigt wird. |
-| SOC-Schrittweite | Fahrplanraster ausgehend von 50 %. Standard sind 10 %, um die Zahl der persistenten Wechselrichter-Schreibzugriffe zu reduzieren. Werte unter 3 % bleiben auswählbar, verursachen aber besonders viele Schreibzugriffe. Verpasste Stufen werden übersprungen. |
+| SOC-Schrittweite | Fahrplanraster ausgehend von 50 %. Standard sind 10 %, um die Zahl der persistenten Wechselrichter-Schreibzugriffe zu reduzieren. Der letzte Restschritt endet immer exakt beim Max-SOC. Werte unter 3 % bleiben auswählbar, verursachen aber besonders viele Schreibzugriffe. Verpasste Stufen werden übersprungen. |
 | Mindestabstand Schreibzugriffe | Mindestzeit zwischen zwei prognosebedingten Änderungen. |
 | Gewünschte Schreibobergrenze pro Tag | Tageslimit für normale Änderungen. Ist für 50 % bis Max-SOC rechnerisch eine höhere Zahl erforderlich, wird die wirksame Grenze automatisch angehoben. Standard: 20. Einmalige Sicherheits-, Bypass- und abschließende Tagesfreigaben werden getrennt gezählt. |
 | Open-Meteo-Intervall | Abstand zwischen automatischen Wetterabrufen. |
