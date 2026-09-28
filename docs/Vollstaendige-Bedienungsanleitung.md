@@ -200,6 +200,8 @@ Der Verlauf schreibt alle fünf Minuten einen kompakten Messpunkt in eine Tagesd
 | Lernrate Lastprofil | Gewicht einer neuen Beobachtung gegenüber dem gespeicherten Wert. |
 | Schwelle wiederkehrende Großlast | Mehrleistung über der Grundlast, ab der ein separates Ereignis wie regelmäßiges Autoladen gelernt wird. |
 
+Außerhalb des PV-Ladefensters schreibt die Prognoseregelung keine schrittweisen Max-SOC-Absenkungen mehr. Während der Akku nachts entlädt, wird der aktuell berechnete niedrigere Wert lediglich vorgemerkt und im Prognosestatus angezeigt. 15 Minuten vor dem prognostizierten Sonnenaufgang wird der dann gültige Morgenwert einmal geschrieben und zurückgelesen. Beginnt die reale PV-Produktion unerwartet früher und erreicht mindestens 100 W, erfolgt die Freigabe sofort. Bypass, dynamische Netzladung sowie Sicherheits- und Wiederherstellungszugriffe werden niemals durch diese Nachtlogik verzögert.
+
 #### Wartungsarbeiten und Batterieerweiterung
 
 Vor Wartungs-, Service-, Umbau- oder Inbetriebnahmearbeiten an Wechselrichter oder Batteriesystem muss die Betriebsart auf **Bypass aktiv** gestellt und mit **Speichern und neu starten** übernommen werden. Dadurch darf die Prognoseregelung keine wiederholten Max-SOC-Freigaben mehr ausführen, während ein Fachbetrieb Einstellungen ändert, Komponenten prüft oder herstellerspezifische Serviceabläufe durchführt.

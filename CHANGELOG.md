@@ -2,6 +2,13 @@
 
 ## Unveröffentlicht
 
+## 1.3.3 – 2026-09-28
+
+- unterdrückt schrittweise Max-SOC-Absenkungen außerhalb des PV-Ladefensters und führt sie vor dem nächsten Produktionsbeginn zu einem einzigen Schreibzugriff zusammen
+- setzt den zusammengefassten Morgenwert 15 Minuten vor dem prognostizierten Sonnenaufgang oder sofort bei unerwartet früher PV-Leistung ab 100 W
+- zeigt den vorgemerkten Nachtwert weiterhin als berechnete SOC-Freigabe und im Prognosestatus an
+- nimmt Bypass, dynamische Netzladung sowie Sicherheits- und Wiederherstellungszugriffe ausdrücklich von der Nachtunterdrückung aus
+
 ## 1.3.2 – 2026-09-22
 
 - liest das optionale 32-Bit-Inputregister `Grid-side fault` 13052–13053 (nullbasiert 13051–13052) und wertet gezielt Bit 8 „Grid Power Outage“ aus

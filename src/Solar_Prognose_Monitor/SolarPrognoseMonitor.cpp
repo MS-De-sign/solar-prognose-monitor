@@ -61,7 +61,7 @@
 */
 
 namespace ConfigDefaults {
-constexpr char FIRMWARE_VERSION[] = "1.3.2";
+constexpr char FIRMWARE_VERSION[] = "1.3.3";
 constexpr char MANUFACTURER[] = "MS-De-sign / Marcus Sonntag";
 constexpr char LICENSE_TEXT[] = "PolyForm Noncommercial License 1.0.0";
 constexpr char PROJECT_URL[] = "https://github.com/MS-De-sign/solar-prognose-monitor";
@@ -104,6 +104,8 @@ constexpr uint32_t RIPPLE_READ_INTERVAL_MS = 30000;
 constexpr uint8_t MIN_MAX_SOC_PERCENT = 50;
 constexpr uint32_t FORECAST_CONTROL_RETRY_INTERVAL_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t FORECAST_SLICE_SECONDS = 15UL * 60UL;
+constexpr uint32_t FORECAST_MORNING_WRITE_LEAD_SECONDS = 15UL * 60UL;
+constexpr float FORECAST_EARLY_PV_THRESHOLD_W = 100.0f;
 constexpr uint32_t LOAD_SAMPLE_INTERVAL_MS = 5000;
 constexpr uint32_t PROFILE_PERSIST_INTERVAL_MS = 60UL * 60UL * 1000UL;
 constexpr uint32_t HISTORY_SAMPLE_SECONDS = 5UL * 60UL;
@@ -846,6 +848,8 @@ uint8_t priorityMaxSocWritesToday = 0;
 int maxSocWriteYearDay = -1;
 bool finalMaxSocReleasedToday = false;
 bool forecastRestorePending = false;
+bool deferredNightSocDecrease = false;
+uint16_t deferredNightSocRaw = 0;
 
 uint16_t holdingExportLimitWatts = 0;
 uint16_t holdingExportLimitEnabledRaw = 0;
@@ -4590,6 +4594,25 @@ uint16_t desiredMaxSocRaw() {
   return static_cast<uint16_t>(lroundf(desired * 10.0f));
 }
 
+bool forecastPvWriteWindowOpen(time_t now) {
+  RegisterDef *pvPower = findRegister(SourceGroup::INVERTER, 5016);
+  const uint32_t maximumAgeMs = max<uint32_t>(30000UL,
+      static_cast<uint32_t>(config.pollSeconds) * 2000UL + 5000UL);
+  // Eine unerwartet fruehe reale PV-Produktion hat Vorrang vor der
+  // Sonnenaufgangsprognose, damit die Ladegrenze rechtzeitig gesetzt wird.
+  if (registerIsFresh(pvPower, maximumAgeMs)
+      && pvPower->value >= ConfigDefaults::FORECAST_EARLY_PV_THRESHOLD_W) {
+    return true;
+  }
+  if (forecast.sunrise <= 0 || forecast.finishAt <= forecast.sunrise) {
+    // Ohne belastbares Zeitfenster das bisherige Verhalten beibehalten.
+    return true;
+  }
+  const time_t windowStart = forecast.sunrise
+      - static_cast<time_t>(ConfigDefaults::FORECAST_MORNING_WRITE_LEAD_SECONDS);
+  return now >= windowStart && now <= forecast.finishAt;
+}
+
 void scheduleNextForecastControl(bool retry = false) {
   if (retry || !clockIsValid() || !config.forecastEnabled || config.forecastBypass) {
     nextForecastControlAt = millis() + ConfigDefaults::FORECAST_CONTROL_RETRY_INTERVAL_MS;
@@ -4604,6 +4627,14 @@ void scheduleNextForecastControl(bool retry = false) {
   if (forecast.finishAt > now) {
     const uint32_t secondsUntilFinish = static_cast<uint32_t>(forecast.finishAt - now);
     secondsUntilControl = min(secondsUntilControl, secondsUntilFinish);
+  }
+  if (forecast.sunrise > 0) {
+    const time_t morningWriteAt = forecast.sunrise
+        - static_cast<time_t>(ConfigDefaults::FORECAST_MORNING_WRITE_LEAD_SECONDS);
+    if (morningWriteAt > now) {
+      secondsUntilControl = min(secondsUntilControl,
+          static_cast<uint32_t>(morningWriteAt - now));
+    }
   }
   nextForecastControlAt = millis() + max<uint32_t>(1U, secondsUntilControl) * 1000UL;
 }
@@ -4633,6 +4664,10 @@ void serviceForecastCharging() {
   const bool forecastRequested = config.forecastEnabled && !config.forecastBypass && forecastIsFresh();
   const bool directSocAvailable = isfinite(currentBatterySoc());
   const bool controlling = forecastRequested && directSocAvailable;
+  if (!forecastRequested) {
+    deferredNightSocDecrease = false;
+    deferredNightSocRaw = 0;
+  }
   const bool finalReleaseDue = controlling && forecast.finishAt > 0
       && time(nullptr) >= forecast.finishAt && !finalMaxSocReleasedToday;
   const uint16_t configuredMaxSocRaw = static_cast<uint16_t>(config.maxSoc) * 10U;
@@ -4641,6 +4676,26 @@ void serviceForecastCharging() {
       : (controlling ? desiredMaxSocRaw() : configuredMaxSocRaw);
   if (finalReleaseDue) forecast.requestedSoc = config.maxSoc;
   if (controlling) forecastRestorePending = true;
+  const bool pvWriteWindowOpen = controlling && forecastPvWriteWindowOpen(time(nullptr));
+  // Nach Ende der PV-Produktion beeinflusst ein niedrigerer Max-SOC die
+  // normale Entladung nicht. Mehrere Absenkungen werden deshalb nur intern
+  // nachgefuehrt und am Morgen zu einem einzigen Schreibzugriff verdichtet.
+  if (controlling && !finalReleaseDue && desiredRaw < holdingMaxSocRaw
+      && !pvWriteWindowOpen) {
+    deferredNightSocDecrease = true;
+    deferredNightSocRaw = desiredRaw;
+    forecast.status = "Nacht: Max-SOC-Absenkung auf "
+        + String(desiredRaw / 10.0f, 1)
+        + " % vorgemerkt; einmaliges Schreiben vor PV-Start";
+    return;
+  }
+  const bool deferredMorningWrite = controlling && deferredNightSocDecrease
+      && pvWriteWindowOpen && desiredRaw < holdingMaxSocRaw;
+  if (controlling && deferredNightSocDecrease && pvWriteWindowOpen
+      && desiredRaw >= holdingMaxSocRaw) {
+    deferredNightSocDecrease = false;
+    deferredNightSocRaw = 0;
+  }
   if (forecastRequested && !directSocAvailable) {
     forecast.status = "Sicherheitsfreigabe: absoluter Batteriestand 10743 nicht verfügbar";
     if (holdingMaxSocRaw != desiredRaw) forecastRestorePending = true;
@@ -4679,7 +4734,8 @@ void serviceForecastCharging() {
     forecast.status = "Tages-Max-SOC war bereits vollständig freigegeben";
     return;
   }
-  if (!priorityWrite && !finalPartialStep && difference < normalDifference) {
+  if (!priorityWrite && !finalPartialStep && !deferredMorningWrite
+      && difference < normalDifference) {
     forecast.status = "Fahrplan hält die aktuelle SOC-Freigabe; nächste Stufe folgt zeitbasiert";
     return;
   }
@@ -4697,6 +4753,8 @@ void serviceForecastCharging() {
       forecast.status = "Tages-Max-SOC abschließend geschrieben und verifiziert";
       debugPrintln(forecast.status);
     } else if (oneShotWrite) {
+      deferredNightSocDecrease = false;
+      deferredNightSocRaw = 0;
       forecastRestorePending = false;
       preferences.begin("sungrow", false);
       preferences.putBool("fcrestore", false);
@@ -4704,6 +4762,12 @@ void serviceForecastCharging() {
       forecast.status = config.forecastBypass
           ? "Bypass: Max-SOC einmalig geschrieben und verifiziert; weitere Änderungen werden nicht überschrieben"
           : "Max-SOC einmalig wiederhergestellt und verifiziert";
+      debugPrintln(forecast.status);
+    } else if (deferredMorningWrite) {
+      deferredNightSocDecrease = false;
+      deferredNightSocRaw = 0;
+      forecast.status = "Morgenwert einmalig geschrieben und verifiziert: "
+                      + String(holdingMaxSocRaw / 10.0f, 1) + " %";
       debugPrintln(forecast.status);
     } else {
       forecast.status = "Zeitbasierte SOC-Stufe geschrieben und verifiziert: "
@@ -4982,7 +5046,7 @@ void handleSettings() {
   part += String(config.learningPercent);
   part += F("'></label><label>Schwelle wiederkehrende Großlast (W)<input name='eventw' type='number' min='250' max='20000' value='");
   part += String(config.eventLoadThresholdWatts);
-  part += F("'></label><p class='hint full'>Max-SOC wird an Holding-Adresse 13057 (Herstellerregister 13058) mit 0,1-%-Skalierung geschrieben und danach zurückgelesen. Die Regelung schreibt ausschließlich Werte von 50 bis 100 % und nie unter den aktuellen direkten SOC oder unter Min-SOC. Das Erreichen einer freigegebenen SOC-Stufe löst nicht selbst die nächste Stufe aus; diese folgt ausschließlich dem zeitlichen Prognosefahrplan.</p></div><h3>Dachflächen</h3>");
+  part += F("'></label><p class='hint full'>Max-SOC wird an Holding-Adresse 13057 (Herstellerregister 13058) mit 0,1-%-Skalierung geschrieben und danach zurückgelesen. Die Regelung schreibt ausschließlich Werte von 50 bis 100 % und nie unter den aktuellen direkten SOC oder unter Min-SOC. Das Erreichen einer freigegebenen SOC-Stufe löst nicht selbst die nächste Stufe aus; diese folgt ausschließlich dem zeitlichen Prognosefahrplan. Nächtliche Absenkungen werden nur vorgemerkt und 15 Minuten vor Sonnenaufgang beziehungsweise bei mindestens 100 W früher PV-Produktion einmalig geschrieben.</p></div><h3>Dachflächen</h3>");
   sendChunk(part);
   for (size_t i = 0; i < PV_ARRAY_COUNT; ++i) {
     const PvArrayConfig &array = config.pvArrays[i];
@@ -5703,6 +5767,9 @@ void handleForecastApi() {
   out += F(",\"plannedSoc\":"); out += String(forecast.plannedSoc, 1); out += F(",\"reachableSoc\":"); out += String(forecast.reachableSoc, 1);
   out += F(",\"requestedSoc\":"); out += String(forecast.requestedSoc, 1); out += F(",\"holdingMaxSoc\":"); out += holdingSocValid ? String(holdingMaxSocRaw / 10.0f, 1) : F("null");
   out += F(",\"holdingMinSoc\":"); out += holdingSocValid ? String(holdingMinSocRaw / 10.0f, 1) : F("null");
+  out += F(",\"nightDecreaseDeferred\":"); out += deferredNightSocDecrease ? F("true") : F("false");
+  out += F(",\"deferredSoc\":");
+  out += deferredNightSocDecrease ? String(deferredNightSocRaw / 10.0f, 1) : F("null");
   out += F(",\"writes\":"); out += String(maxSocWritesToday); out += F(",\"maxWrites\":"); out += String(effectiveMaxSocWritesPerDay());
   out += F(",\"priorityWrites\":"); out += String(priorityMaxSocWritesToday);
   out += F(",\"totalPv\":"); out += String(forecast.totalPvKwh, 2); out += F(",\"totalLoad\":"); out += String(forecast.totalLearnedLoadKwh, 2);

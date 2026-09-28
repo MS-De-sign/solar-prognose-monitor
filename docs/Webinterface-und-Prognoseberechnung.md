@@ -158,6 +158,8 @@ Bei einem Sicherheitsfaktor von 80 % erreicht der Plan-SOC sein Ziel nach ungef�
 
 Die Software begrenzt dabei keine Ladeleistung. Innerhalb eines freigegebenen Abschnitts kann der Wechselrichter mit der verfügbaren Leistung bis zur SOC-Grenze laden. Das Ergebnis sind über den Tag verteilte Ladeblöcke mit Pausen und keine kontinuierliche Ladung mit fest vorgegebenem kleinem Ladestrom.
 
+Nach dem Ende des PV-Ladefensters werden fallende Max-SOC-Sollwerte nicht mehr stufenweise in den Wechselrichter geschrieben. Die Software berechnet sie weiter, merkt sich jedoch nur den jeweils aktuellen Nachtwert. 15 Minuten vor dem prognostizierten Sonnenaufgang wird daraus genau ein geprüfter Morgen-Schreibzugriff. Wird vorher bereits eine frische PV-Leistung von mindestens 100 W gemessen, öffnet sich das Schreibfenster sofort. Dadurch beeinflusst die Nachtentladung weiterhin den nächsten Fahrplan, ohne für Zwischenwerte mehrere persistente Wechselrichterschreibzugriffe zu erzeugen. Dynamische Netzladung, Bypass, Sicherheitsfreigaben und Wiederherstellungen umgehen diese Zusammenfassung bewusst.
+
 Die wirksame Tagesgrenze ist mindestens `aufrunden((Max-SOC − 50 %) / Schrittweite)`. Bei 100 % Max-SOC und 3 % Schrittweite sind daher mindestens 17 normale Regelwrites möglich, auch wenn noch der frühere Standardwert 12 gespeichert ist. Eine höher eingestellte Schreibobergrenze bleibt wirksam.
 
 Zum eingestellten Ladeende wird der konfigurierte Max-SOC einmal abschließend geschrieben und zurückgelesen. Diese Sicherheitsfreigabe ist nicht durch das Tageslimit oder den normalen Mindestabstand blockiert. Im Prognose-Tab werden normale Regelwrites und solche Sonderwrites getrennt angezeigt.

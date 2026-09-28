@@ -14,9 +14,9 @@ Dafür kombiniert die Software mehrere Informationen:
 
 Der Hausverbrauch wird für jeden Wochentag in 15-Minuten-Blöcken gelernt. Wiederkehrende Lasten – beispielsweise ein regelmäßig am Nachmittag geladenes Elektroauto – fließen dadurch zunehmend in die Planung ein. Jede stündliche Open-Meteo-Prognose wird intern in vier Viertelstunden aufgeteilt und mit den vier jeweils passenden Lastprofilwerten verrechnet. Übersteigt eine erwartete Last die PV-Leistung, wird die Differenz als voraussichtliche Batterieentladung berücksichtigt. Der rückwärts gerechnete Mindest-SOC kann dadurch bereits vor einem bekannten Großverbraucher ansteigen. Berechnung, Lernprofil und Messverlauf bleiben auf dem ESP32; lediglich die Wettervorhersage wird von Open-Meteo abgerufen. Ein eigener Cloud- oder Herstellerserver ist nicht erforderlich.
 
-Die Steuerung gibt den zulässigen Ladezielwert schrittweise frei. Bei einer unerwarteten Wolkenphase wartet sie nicht auf eine verpasste Zwischenstufe, sondern wechselt auf den zur aktuellen Uhrzeit vorgesehenen Wert. Zusätzlich prüft sie, welcher Batteriestand mindestens freigegeben werden muss, damit das Tagesziel mit der noch erwarteten Energie erreichbar bleibt. Sicherheitsreserve, gewünschtes Ladeende und Schrittweite lassen sich einstellen. Da Wetter- und Verbrauchsprognosen nie vollkommen exakt sind, ersetzt das System keine Anlagenüberwachung und sollte bei der ersten Inbetriebnahme kontrolliert werden.
+Die Steuerung gibt den zulässigen Ladezielwert schrittweise frei. Bei einer unerwarteten Wolkenphase wartet sie nicht auf eine verpasste Zwischenstufe, sondern wechselt auf den zur aktuellen Uhrzeit vorgesehenen Wert. Zusätzlich prüft sie, welcher Batteriestand mindestens freigegeben werden muss, damit das Tagesziel mit der noch erwarteten Energie erreichbar bleibt. Nächtliche Absenkungen der Ladeobergrenze werden nur intern nachgeführt und kurz vor der nächsten PV-Produktion zu einem einzigen Schreibzugriff zusammengefasst. Sicherheitsreserve, gewünschtes Ladeende und Schrittweite lassen sich einstellen. Da Wetter- und Verbrauchsprognosen nie vollkommen exakt sind, ersetzt das System keine Anlagenüberwachung und sollte bei der ersten Inbetriebnahme kontrolliert werden.
 
-Aktuelle Version: **1.3.2**
+Aktuelle Version: **1.3.3**
 
 **Hardwarestand:** Die aktuelle Firmware ist für ein klassisches **ESP32 DevKit mit ESP32-WROOM-Modul** ausgelegt. Weitere ESP32-Varianten wie der **ESP32-C3** werden derzeit getestet; Pinbelegung, Partitionierung und Programmcode werden dafür schrittweise angepasst. Bis eine Variante ausdrücklich als unterstützt gekennzeichnet ist, sollte dafür nicht ungeprüft die DevKit-Firmware verwendet werden.
 
@@ -57,7 +57,7 @@ Die technische Umsetzung verwendet Modbus Unit-ID 1 und das Holding-Register fü
 
 ## Dynamischer Stromtarif
 
-Version 1.3.2 berechnet den voraussichtlichen Batteriestand am Ende des nächsten PV-Tages aus Open-Meteo, absolutem Batterie-SOC und gelerntem Lastprofil. Bleibt eine Energielücke, sucht die Software vor dem nächsten Sonnenaufgang nach ausreichend günstigen Preisintervallen. Unterstützt werden Tibber, aWATTar, Octopus Energy und eine dokumentierte eigene REST-API.
+Version 1.3.3 berechnet den voraussichtlichen Batteriestand am Ende des nächsten PV-Tages aus Open-Meteo, absolutem Batterie-SOC und gelerntem Lastprofil. Bleibt eine Energielücke, sucht die Software vor dem nächsten Sonnenaufgang nach ausreichend günstigen Preisintervallen. Unterstützt werden Tibber, aWATTar, Octopus Energy und eine dokumentierte eigene REST-API.
 
 Die Funktion arbeitet bewusst zweistufig: **Preis- und Netzladeplan berechnen** zeigt zunächst nur den Plan. Erst **Automatische Netzladung ausdrücklich freigeben** erlaubt Schreibzugriffe. Die Software liest die vom Installateur hinterlegte Zwangsladeleistung und maximale Ladeleistung lediglich aus. Sie verändert niemals Ladeleistung, maximalen Ladestrom oder BMS-Grenzen. Fehlen plausible Werte, Wetterdaten, absoluter SOC, On-grid-Status oder aktuelle Preise, bleibt die Automatik gesperrt beziehungsweise beendet die Ladung. Vor dem Start wird ein dauerhafter Wiederherstellungsauftrag gespeichert, damit ein ESP32-Neustart zuerst einen Stop-Befehl sendet und anschließend den vorherigen EMS-Modus sowie den vorherigen SOC-Grenzwert wiederherstellt.
 
@@ -107,10 +107,10 @@ Der Sketch verwendet ausschließlich Bibliotheken aus dem ESP32-Core.
 Für einen reproduzierbaren Build beider Varianten im Projektordner ausführen:
 
 ```powershell
-.\scripts\build-release.ps1 -Version 1.3.2
+.\scripts\build-release.ps1 -Version 1.3.3
 ```
 
-Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.3.2`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
+Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.3.3`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
 
 ### Erstinstallation der Partitionstabelle
 
