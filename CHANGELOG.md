@@ -2,6 +2,17 @@
 
 ## Unveröffentlicht
 
+## 1.4.0 – 2026-10-22
+
+- verbessert die Bedienbarkeit der gesamten Weboberfläche mit VoiceOver, anderen Screenreadern und der Tastatur
+- ergänzt auf allen Hauptseiten einen Sprunglink zum Hauptinhalt, eine benannte Hauptnavigation und die semantische Kennzeichnung der aktuell geöffneten Seite
+- macht den Tastaturfokus deutlich sichtbar und berücksichtigt die Systemeinstellung für reduzierte Bewegungen
+- versieht Suchfelder, Auswahllisten, Firmwaredatei und Upload-Fortschritt mit eindeutigen Beschriftungen
+- gibt wichtige Lade-, Fehler-, Update- und Uploadmeldungen über zurückhaltende Live-Statusbereiche an Hilfstechnologien weiter
+- ergänzt Tabellenbeschreibungen und korrekt zugeordnete Zeilen- beziehungsweise Spaltenüberschriften
+- beschreibt Diagramme für Screenreader; Prognose-, Tarif- und Lastprofildaten bleiben zusätzlich als Tabellen zugänglich, der Verlauf erhält eine textliche Zusammenfassung des letzten Messpunkts
+- behält Gestaltung, Modbus-Kommunikation, Prognoseregelung, gespeicherte Einstellungen und Updateverfahren unverändert bei
+
 ## 1.3.3 – 2026-09-28
 
 - unterdrückt schrittweise Max-SOC-Absenkungen außerhalb des PV-Ladefensters und führt sie vor dem nächsten Produktionsbeginn zu einem einzigen Schreibzugriff zusammen
