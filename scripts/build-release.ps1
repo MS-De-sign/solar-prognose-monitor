@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "1.4.0"
+  [string]$Version = "1.5.1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,6 +36,8 @@ if ($LASTEXITCODE -ne 0) { throw "Der 4-MB-Build ist fehlgeschlagen." }
 Copy-Item -LiteralPath (Join-Path $sourceDir "$sketchName.ino") -Destination $eightMbSketch -Force
 Copy-Item -LiteralPath (Join-Path $sourceDir "SolarPrognoseMonitor.cpp") -Destination $eightMbSketch -Force
 Copy-Item -LiteralPath (Join-Path $sourceDir "SolarPrognoseMonitor.h") -Destination $eightMbSketch -Force
+Copy-Item -LiteralPath (Join-Path $sourceDir "MqttPublisher.cpp") -Destination $eightMbSketch -Force
+Copy-Item -LiteralPath (Join-Path $sourceDir "MqttPublisher.h") -Destination $eightMbSketch -Force
 Copy-Item -LiteralPath (Join-Path $sourceDir "partitions_8MB.csv") `
   -Destination (Join-Path $eightMbSketch "partitions.csv") -Force
 

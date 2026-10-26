@@ -17,6 +17,7 @@
  */
 
 #include "SolarPrognoseMonitor.h"
+#include "MqttPublisher.h"
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <NetworkClientSecure.h>
@@ -50,6 +51,7 @@
   - Dauerhafter 31-Tage-Anlagenverlauf in LittleFS mit Messpunkten im 5-Minuten-Takt.
   - Drei- oder Vier-Kontakt-Rundsteuerung mit verifizierten Exportlimit-Schreibzugriffen.
   - Auswaehlbare Pushover-Meldungen fuer Start, Ausfaelle, Tagesbericht und Updates.
+  - MQTT-Datenweitergabe sowie lesender Prometheus-Endpunkt fuer Hausautomation und Zeitreihen.
   - Fuer einen RS485-Transceiver sind RX, TX und ein gemeinsamer DE-/RE-Pin konfigurierbar.
   - Es ist keine zusaetzliche Modbus-Bibliothek erforderlich.
   - Der ESP32 startet immer einen eigenen Access Point.
@@ -61,7 +63,7 @@
 */
 
 namespace ConfigDefaults {
-constexpr char FIRMWARE_VERSION[] = "1.4.0";
+constexpr char FIRMWARE_VERSION[] = "1.5.1";
 constexpr char MANUFACTURER[] = "MS-De-sign / Marcus Sonntag";
 constexpr char LICENSE_TEXT[] = "PolyForm Noncommercial License 1.0.0";
 constexpr char PROJECT_URL[] = "https://github.com/MS-De-sign/solar-prognose-monitor";
@@ -112,6 +114,9 @@ constexpr uint32_t HISTORY_SAMPLE_SECONDS = 5UL * 60UL;
 constexpr uint16_t HISTORY_RETENTION_DAYS = 31;
 constexpr uint16_t PUSHOVER_FAILURE_DELAY_SECONDS = 60;
 constexpr uint16_t PUSHOVER_RETRY_MINUTES = 15;
+constexpr uint16_t MQTT_PORT = 1883;
+constexpr uint16_t MQTT_PUBLISH_INTERVAL_SECONDS = 15;
+constexpr uint32_t MQTT_RECONNECT_INTERVAL_MS = 15000;
 constexpr char PUSHOVER_ENDPOINT[] = "https://api.pushover.net/1/messages.json";
 constexpr char GITHUB_LATEST_RELEASE_ENDPOINT[] =
     "https://api.github.com/repos/MS-De-sign/solar-prognose-monitor/releases/latest";
@@ -634,6 +639,16 @@ struct AppConfig {
   bool pushoverDailyPv;
   bool pushoverDailyBattery;
   bool pushoverNotifyUpdate;
+  bool mqttEnabled;
+  String mqttHost;
+  uint16_t mqttPort;
+  String mqttUsername;
+  String mqttPassword;
+  String mqttBaseTopic;
+  uint16_t mqttPublishIntervalSeconds;
+  bool mqttRetainValues;
+  bool mqttHomeAssistantDiscovery;
+  String mqttDiscoveryPrefix;
   bool tariffPlanningEnabled;
   bool tariffAutomationApproved;
   uint8_t tariffProvider;
@@ -877,6 +892,7 @@ WebServer server(80);
 DNSServer dnsServer;
 WiFiClient modbusClient;
 HardwareSerial modbusSerial(2);
+MqttPublisher mqttPublisher;
 
 String accessPointSsid;
 String lastTransactionError = "Noch keine Abfrage";
@@ -898,6 +914,15 @@ bool batteryCycleOk = true;
 bool rtuFallbackActive = false;
 bool mdnsStarted = false;
 bool timeSyncStarted = false;
+
+String mqttStatus = "MQTT deaktiviert";
+uint32_t nextMqttConnectAt = 0;
+uint32_t nextMqttPublishAt = 0;
+uint32_t lastMqttPublishAt = 0;
+uint32_t mqttPublishedMessages = 0;
+bool mqttDiscoveryPending = true;
+bool mqttDiscoveryCleanupPending = false;
+String mqttDiscoveryCleanupPrefix;
 
 enum class PushoverEvent : uint8_t {
   NONE,
@@ -937,6 +962,34 @@ bool pushoverUpdateNotificationNeeded = false;
 
 bool timeReached(uint32_t target);
 bool jsonString(const String &json, const String &key, String &value, int fromIndex);
+
+String mqttDeviceSuffix() {
+  char suffix[7];
+  snprintf(suffix, sizeof(suffix), "%06lX",
+           static_cast<unsigned long>(ESP.getEfuseMac() & 0xFFFFFFULL));
+  return String(suffix);
+}
+
+String defaultMqttBaseTopic() {
+  return "solar-prognose-monitor/" + mqttDeviceSuffix();
+}
+
+String normalizeMqttTopic(String value, const String &fallback) {
+  value.trim();
+  while (value.startsWith("/")) value.remove(0, 1);
+  while (value.endsWith("/")) value.remove(value.length() - 1);
+  while (value.indexOf("//") >= 0) value.replace("//", "/");
+  if (value.isEmpty() || value.length() > 160 || value.indexOf('#') >= 0
+      || value.indexOf('+') >= 0) return fallback;
+  for (size_t i = 0; i < value.length(); ++i) {
+    if (static_cast<uint8_t>(value[i]) < 0x20) return fallback;
+  }
+  return value;
+}
+
+String mqttClientId() {
+  return "spm-" + mqttDeviceSuffix();
+}
 
 void appendWebDebug(const String &text) {
   if (!webDebugEnabled) return;
@@ -1852,6 +1905,19 @@ void loadConfig() {
   config.pushoverDailyPv = preferences.getBool("podailypv", false);
   config.pushoverDailyBattery = preferences.getBool("podailybat", false);
   config.pushoverNotifyUpdate = preferences.getBool("poupdate", false);
+  config.mqttEnabled = preferences.getBool("mqen", false);
+  config.mqttHost = preferences.getString("mqhost", "");
+  config.mqttPort = preferences.getUShort("mqport", ConfigDefaults::MQTT_PORT);
+  config.mqttUsername = preferences.getString("mquser", "");
+  config.mqttPassword = preferences.getString("mqpass", "");
+  config.mqttBaseTopic = preferences.getString("mqtopic", defaultMqttBaseTopic());
+  config.mqttPublishIntervalSeconds = preferences.getUShort(
+      "mqint", ConfigDefaults::MQTT_PUBLISH_INTERVAL_SECONDS);
+  config.mqttRetainValues = preferences.getBool("mqretain", true);
+  config.mqttHomeAssistantDiscovery = preferences.getBool("mqha", false);
+  config.mqttDiscoveryPrefix = preferences.getString("mqhapfx", "homeassistant");
+  mqttDiscoveryCleanupPending = preferences.getBool("mqcleanup", false);
+  mqttDiscoveryCleanupPrefix = preferences.getString("mqclnpfx", "homeassistant");
   pushoverLastDailyReportDate = preferences.getUInt("polastday", 0);
   lastVersionCheckEpoch = preferences.getUInt("pocheck", 0);
   latestReleaseVersion = preferences.getString("polatest", "");
@@ -1988,6 +2054,16 @@ void loadConfig() {
   if (config.pushoverRetryMinutes < 1 || config.pushoverRetryMinutes > 1440) {
     config.pushoverRetryMinutes = ConfigDefaults::PUSHOVER_RETRY_MINUTES;
   }
+  config.mqttHost.trim();
+  config.mqttUsername.trim();
+  if (config.mqttUsername.isEmpty()) config.mqttPassword = "";
+  if (config.mqttPort == 0) config.mqttPort = ConfigDefaults::MQTT_PORT;
+  if (config.mqttPublishIntervalSeconds < 5 || config.mqttPublishIntervalSeconds > 3600) {
+    config.mqttPublishIntervalSeconds = ConfigDefaults::MQTT_PUBLISH_INTERVAL_SECONDS;
+  }
+  config.mqttBaseTopic = normalizeMqttTopic(config.mqttBaseTopic, defaultMqttBaseTopic());
+  config.mqttDiscoveryPrefix = normalizeMqttTopic(config.mqttDiscoveryPrefix, "homeassistant");
+  if (config.mqttHost.isEmpty()) config.mqttEnabled = false;
   sanitizeModbusConfig();
   sanitizeSurplusConfig();
   sanitizeForecastConfig();
@@ -2022,6 +2098,18 @@ void saveConfig() {
   preferences.putBool("podailypv", config.pushoverDailyPv);
   preferences.putBool("podailybat", config.pushoverDailyBattery);
   preferences.putBool("poupdate", config.pushoverNotifyUpdate);
+  preferences.putBool("mqen", config.mqttEnabled);
+  preferences.putString("mqhost", config.mqttHost);
+  preferences.putUShort("mqport", config.mqttPort);
+  preferences.putString("mquser", config.mqttUsername);
+  preferences.putString("mqpass", config.mqttPassword);
+  preferences.putString("mqtopic", config.mqttBaseTopic);
+  preferences.putUShort("mqint", config.mqttPublishIntervalSeconds);
+  preferences.putBool("mqretain", config.mqttRetainValues);
+  preferences.putBool("mqha", config.mqttHomeAssistantDiscovery);
+  preferences.putString("mqhapfx", config.mqttDiscoveryPrefix);
+  preferences.putBool("mqcleanup", mqttDiscoveryCleanupPending);
+  preferences.putString("mqclnpfx", mqttDiscoveryCleanupPrefix);
   preferences.putUInt("polastday", pushoverLastDailyReportDate);
   preferences.putUInt("pocheck", lastVersionCheckEpoch);
   preferences.putString("polatest", latestReleaseVersion);
@@ -2944,6 +3032,408 @@ RegisterDef *findRegister(SourceGroup source, uint16_t address) {
 
 bool registerIsFresh(const RegisterDef *reg, uint32_t maximumAgeMs = 30000UL) {
   return reg != nullptr && reg->valid && reg->updatedAt != 0 && millis() - reg->updatedAt <= maximumAgeMs;
+}
+
+String mqttSourceName(SourceGroup source) {
+  if (source == SourceGroup::BATTERY) return "battery";
+  if (source == SourceGroup::METER) return "meter";
+  return "inverter";
+}
+
+String mqttRegisterTopic(const RegisterDef &reg) {
+  return config.mqttBaseTopic + "/register/" + mqttSourceName(reg.source)
+      + "/" + String(reg.address);
+}
+
+bool mqttPublish(const String &topic, const String &payload, bool retained) {
+  if (!mqttPublisher.publish(topic, payload, retained)) {
+    mqttStatus = "Senden fehlgeschlagen: " + mqttPublisher.lastError();
+    return false;
+  }
+  ++mqttPublishedMessages;
+  return true;
+}
+
+String mqttDeviceClass(const RegisterDef &reg) {
+  const String unit = reg.unit;
+  if (unit == "W") return "power";
+  if (unit == "kWh") return "energy";
+  if (unit == "%") return reg.address == 10743 || reg.address == 13022 ? "battery" : String();
+  if (unit == "°C") return "temperature";
+  if (unit == "Hz") return "frequency";
+  return String();
+}
+
+bool publishMqttRegisterMetadata() {
+  for (size_t i = 0; i < REGISTER_COUNT; ++i) {
+    const RegisterDef &reg = registers[i];
+    String metadata;
+    metadata.reserve(220);
+    metadata = F("{\"address\":");
+    metadata += String(reg.address);
+    metadata += F(",\"source\":\"");
+    metadata += mqttSourceName(reg.source);
+    metadata += F("\",\"name\":\"");
+    metadata += jsonEscape(reg.description);
+    metadata += F("\",\"unit\":\"");
+    metadata += jsonEscape(reg.unit);
+    metadata += F("\",\"decimals\":");
+    metadata += String(reg.decimals);
+    metadata += '}';
+    if (!mqttPublish(mqttRegisterTopic(reg) + "/meta", metadata, true)) return false;
+  }
+  return true;
+}
+
+bool publishHomeAssistantDiscovery() {
+  if (!config.mqttHomeAssistantDiscovery) return true;
+  const String suffix = mqttDeviceSuffix();
+  const String identifier = "spm_" + suffix;
+  for (size_t i = 0; i < REGISTER_COUNT; ++i) {
+    const RegisterDef &reg = registers[i];
+    const String objectId = mqttSourceName(reg.source) + "_" + String(reg.address);
+    const String discoveryTopic = config.mqttDiscoveryPrefix + "/sensor/" + identifier
+        + "/" + objectId + "/config";
+    String payload;
+    payload.reserve(700);
+    payload = F("{\"name\":\"");
+    payload += jsonEscape(reg.description);
+    payload += F("\",\"unique_id\":\"");
+    payload += identifier + "_" + objectId;
+    payload += F("\",\"state_topic\":\"");
+    payload += mqttRegisterTopic(reg);
+    payload += F("\",\"availability_topic\":\"");
+    payload += config.mqttBaseTopic + "/availability";
+    payload += F("\",\"payload_available\":\"online\",\"payload_not_available\":\"offline\"");
+    if (strlen(reg.unit) > 0) {
+      payload += F(",\"unit_of_measurement\":\"");
+      payload += jsonEscape(reg.unit);
+      payload += '"';
+    }
+    const String deviceClass = mqttDeviceClass(reg);
+    if (!deviceClass.isEmpty()) {
+      payload += F(",\"device_class\":\"");
+      payload += deviceClass;
+      payload += '"';
+    }
+    if (String(reg.unit) == "kWh") {
+      payload += F(",\"state_class\":\"");
+      payload += String(reg.description).indexOf("gesamt") >= 0 ? "total_increasing" : "total";
+      payload += '"';
+    } else if (strlen(reg.unit) > 0) {
+      payload += F(",\"state_class\":\"measurement\"");
+    }
+    payload += F(",\"device\":{\"identifiers\":[\"");
+    payload += identifier;
+    payload += F("\"],\"name\":\"Solar Prognose Monitor ");
+    payload += suffix;
+    payload += F("\",\"manufacturer\":\"");
+    payload += jsonEscape(ConfigDefaults::MANUFACTURER);
+    payload += F("\",\"model\":\"ESP32\",\"sw_version\":\"");
+    payload += ConfigDefaults::FIRMWARE_VERSION;
+    payload += F("\"}}");
+    if (!mqttPublish(discoveryTopic, payload, true)) return false;
+  }
+  return true;
+}
+
+bool removeHomeAssistantDiscovery(const String &prefix) {
+  const String identifier = "spm_" + mqttDeviceSuffix();
+  for (size_t i = 0; i < REGISTER_COUNT; ++i) {
+    const RegisterDef &reg = registers[i];
+    const String objectId = mqttSourceName(reg.source) + "_" + String(reg.address);
+    const String topic = prefix + "/sensor/" + identifier + "/" + objectId + "/config";
+    if (!mqttPublish(topic, "", true)) return false;
+  }
+  return true;
+}
+
+void persistMqttDiscoveryCleanupState() {
+  preferences.begin("sungrow", false);
+  preferences.putBool("mqcleanup", mqttDiscoveryCleanupPending);
+  preferences.putString("mqclnpfx", mqttDiscoveryCleanupPrefix);
+  preferences.end();
+}
+
+bool mqttPublishAlias(const String &name, SourceGroup source, uint16_t address) {
+  RegisterDef *reg = findRegister(source, address);
+  if (reg == nullptr || !reg->valid) return true;
+  return mqttPublish(config.mqttBaseTopic + "/metrics/" + name,
+                     String(reg->value, static_cast<unsigned int>(reg->decimals)),
+                     config.mqttRetainValues);
+}
+
+bool publishMqttSnapshot() {
+  if (!mqttPublisher.connected()) return false;
+  if (mqttDiscoveryCleanupPending) {
+    if (!removeHomeAssistantDiscovery(normalizeMqttTopic(
+            mqttDiscoveryCleanupPrefix, "homeassistant"))) return false;
+    mqttDiscoveryCleanupPending = false;
+    mqttDiscoveryCleanupPrefix = "";
+    persistMqttDiscoveryCleanupState();
+  }
+  if (mqttDiscoveryPending) {
+    if (!publishMqttRegisterMetadata() || !publishHomeAssistantDiscovery()) return false;
+    mqttDiscoveryPending = false;
+  }
+
+  String state;
+  state.reserve(1900);
+  state = F("{\"version\":\"");
+  state += ConfigDefaults::FIRMWARE_VERSION;
+  state += F("\",\"device_id\":\"");
+  state += mqttDeviceSuffix();
+  state += F("\",\"timestamp\":");
+  state += time(nullptr) > 1700000000 ? String(static_cast<unsigned long>(time(nullptr))) : F("null");
+  state += F(",\"uptime_seconds\":");
+  state += String(millis() / 1000UL);
+  state += F(",\"wifi_rssi_dbm\":");
+  state += String(WiFi.RSSI());
+  state += F(",\"inverter_available\":");
+  state += lastSuccessfulInverterCycle != 0 && lastInverterError == "OK" ? F("true") : F("false");
+  state += F(",\"battery_available\":");
+  state += lastSuccessfulBatteryCycle != 0 && lastBatteryError == "OK" ? F("true") : F("false");
+  state += F(",\"modbus_transport\":\"");
+  state += jsonEscape(lastModbusTransport);
+  state += F("\",\"values\":{");
+  bool first = true;
+  for (size_t i = 0; i < REGISTER_COUNT; ++i) {
+    const RegisterDef &reg = registers[i];
+    if (!reg.valid) continue;
+    if (!first) state += ',';
+    first = false;
+    state += '"';
+    state += mqttSourceName(reg.source) + "_" + String(reg.address);
+    state += F("\":");
+    state += String(reg.value, static_cast<unsigned int>(reg.decimals));
+  }
+  state += F("}}");
+  if (!mqttPublish(config.mqttBaseTopic + "/state", state, config.mqttRetainValues)) return false;
+
+  for (size_t i = 0; i < REGISTER_COUNT; ++i) {
+    const RegisterDef &reg = registers[i];
+    if (!reg.valid) continue;
+    if (!mqttPublish(mqttRegisterTopic(reg),
+                     String(reg.value, static_cast<unsigned int>(reg.decimals)),
+                     config.mqttRetainValues)) return false;
+  }
+
+  if (!mqttPublishAlias("pv_power_w", SourceGroup::INVERTER, 5016)
+      || !mqttPublishAlias("load_power_w", SourceGroup::INVERTER, 13007)
+      || !mqttPublishAlias("grid_power_w", SourceGroup::INVERTER, 13009)
+      || !mqttPublishAlias("battery_power_w", SourceGroup::INVERTER, 13021)
+      || !mqttPublishAlias("battery_soc_percent", SourceGroup::BATTERY, 10743)
+      || !mqttPublishAlias("battery_soh_percent", SourceGroup::BATTERY, 10744)
+      || !mqttPublishAlias("grid_frequency_hz", SourceGroup::INVERTER, 5035)
+      || !mqttPublishAlias("pv_energy_today_kwh", SourceGroup::INVERTER, 13001)
+      || !mqttPublishAlias("pv_energy_total_kwh", SourceGroup::INVERTER, 13002)
+      || !mqttPublishAlias("grid_import_total_kwh", SourceGroup::METER, 5746)
+      || !mqttPublishAlias("grid_export_total_kwh", SourceGroup::METER, 5748)) return false;
+
+  lastMqttPublishAt = millis();
+  mqttStatus = "Messwerte erfolgreich veröffentlicht";
+  return true;
+}
+
+void configureMqttPublisher() {
+  mqttPublisher.configure(config.mqttHost, config.mqttPort, mqttClientId(),
+                          config.mqttUsername, config.mqttPassword,
+                          config.mqttBaseTopic + "/availability");
+}
+
+void serviceMqtt() {
+  if (!config.mqttEnabled) {
+    if (mqttPublisher.connected()) mqttPublisher.disconnect(true);
+    mqttStatus = "MQTT deaktiviert";
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    if (mqttPublisher.connected()) mqttPublisher.disconnect(false);
+    mqttStatus = "Warte auf WLAN";
+    return;
+  }
+  mqttPublisher.loop();
+  if (!mqttPublisher.connected()) {
+    if (!timeReached(nextMqttConnectAt)) return;
+    configureMqttPublisher();
+    if (!mqttPublisher.connect()) {
+      mqttStatus = "Verbindung fehlgeschlagen: " + mqttPublisher.lastError();
+      nextMqttConnectAt = millis() + ConfigDefaults::MQTT_RECONNECT_INTERVAL_MS;
+      return;
+    }
+    mqttDiscoveryPending = true;
+    nextMqttPublishAt = millis();
+    mqttStatus = "Mit MQTT-Broker verbunden";
+    debugPrintf("MQTT verbunden: %s:%u, Basistopic %s.\n", config.mqttHost.c_str(),
+                config.mqttPort, config.mqttBaseTopic.c_str());
+  }
+  if (timeReached(nextMqttPublishAt)) {
+    const uint32_t interval = static_cast<uint32_t>(config.mqttPublishIntervalSeconds) * 1000UL;
+    if (!publishMqttSnapshot()) {
+      debugPrintln("MQTT: " + mqttStatus + ".");
+      nextMqttConnectAt = millis() + ConfigDefaults::MQTT_RECONNECT_INTERVAL_MS;
+    }
+    nextMqttPublishAt = millis() + interval;
+  }
+}
+
+String prometheusEscapeLabel(const String &value) {
+  String escaped;
+  escaped.reserve(value.length() + 8);
+  for (size_t i = 0; i < value.length(); ++i) {
+    const char c = value.charAt(i);
+    if (c == '\\' || c == '"') {
+      escaped += '\\';
+      escaped += c;
+    } else if (c == '\n') {
+      escaped += F("\\n");
+    } else if (c != '\r') {
+      escaped += c;
+    }
+  }
+  return escaped;
+}
+
+String prometheusRegisterLabels(const RegisterDef &reg) {
+  String labels;
+  labels.reserve(180);
+  labels = F("source=\"");
+  labels += mqttSourceName(reg.source);
+  labels += F("\",address=\"");
+  labels += String(reg.address);
+  labels += F("\",name=\"");
+  labels += prometheusEscapeLabel(reg.description);
+  labels += F("\",unit=\"");
+  labels += prometheusEscapeLabel(reg.unit);
+  labels += '"';
+  return labels;
+}
+
+void appendPrometheusAlias(String &output, const char *metricName,
+                           const char *help, SourceGroup source,
+                           uint16_t address) {
+  const RegisterDef *reg = findRegister(source, address);
+  if (reg == nullptr || !reg->valid || !isfinite(reg->value)) return;
+  output += F("# HELP ");
+  output += metricName;
+  output += ' ';
+  output += help;
+  output += '\n';
+  output += F("# TYPE ");
+  output += metricName;
+  output += F(" gauge\n");
+  output += metricName;
+  output += ' ';
+  output += String(reg->value, static_cast<unsigned int>(reg->decimals));
+  output += '\n';
+}
+
+String buildPrometheusMetrics() {
+  String output;
+  output.reserve(12000);
+  const bool inverterAvailable =
+      lastSuccessfulInverterCycle != 0 && lastInverterError == "OK";
+  const bool batteryAvailable =
+      lastSuccessfulBatteryCycle != 0 && lastBatteryError == "OK";
+
+  output += F("# HELP solar_prognose_monitor_info Firmware and device information.\n");
+  output += F("# TYPE solar_prognose_monitor_info gauge\n");
+  output += F("solar_prognose_monitor_info{version=\"");
+  output += ConfigDefaults::FIRMWARE_VERSION;
+  output += F("\",device_id=\"");
+  output += prometheusEscapeLabel(mqttDeviceSuffix());
+  output += F("\"} 1\n");
+  output += F("# HELP solar_prognose_monitor_uptime_seconds ESP32 uptime in seconds.\n");
+  output += F("# TYPE solar_prognose_monitor_uptime_seconds counter\n");
+  output += F("solar_prognose_monitor_uptime_seconds ");
+  output += String(millis() / 1000UL);
+  output += '\n';
+  output += F("# HELP solar_prognose_monitor_wifi_rssi_dbm Wi-Fi signal strength in dBm.\n");
+  output += F("# TYPE solar_prognose_monitor_wifi_rssi_dbm gauge\n");
+  output += F("solar_prognose_monitor_wifi_rssi_dbm ");
+  output += String(WiFi.RSSI());
+  output += '\n';
+  output += F("# HELP solar_prognose_monitor_inverter_available Whether inverter data is currently available.\n");
+  output += F("# TYPE solar_prognose_monitor_inverter_available gauge\n");
+  output += F("solar_prognose_monitor_inverter_available ");
+  output += inverterAvailable ? '1' : '0';
+  output += '\n';
+  output += F("# HELP solar_prognose_monitor_battery_available Whether direct battery data is currently available.\n");
+  output += F("# TYPE solar_prognose_monitor_battery_available gauge\n");
+  output += F("solar_prognose_monitor_battery_available ");
+  output += batteryAvailable ? '1' : '0';
+  output += '\n';
+  output += F("# HELP solar_prognose_monitor_mqtt_connected Whether the MQTT connection is active.\n");
+  output += F("# TYPE solar_prognose_monitor_mqtt_connected gauge\n");
+  output += F("solar_prognose_monitor_mqtt_connected ");
+  output += mqttPublisher.connected() ? '1' : '0';
+  output += '\n';
+
+  output += F("# HELP solar_prognose_monitor_modbus_register_value Latest decoded Modbus register value.\n");
+  output += F("# TYPE solar_prognose_monitor_modbus_register_value gauge\n");
+  for (size_t i = 0; i < REGISTER_COUNT; ++i) {
+    const RegisterDef &reg = registers[i];
+    if (!reg.valid || !isfinite(reg.value)) continue;
+    output += F("solar_prognose_monitor_modbus_register_value{");
+    output += prometheusRegisterLabels(reg);
+    output += F("} ");
+    output += String(reg.value, static_cast<unsigned int>(reg.decimals));
+    output += '\n';
+  }
+  output += F("# HELP solar_prognose_monitor_modbus_register_valid Whether the Modbus register currently has a valid value.\n");
+  output += F("# TYPE solar_prognose_monitor_modbus_register_valid gauge\n");
+  for (size_t i = 0; i < REGISTER_COUNT; ++i) {
+    const RegisterDef &reg = registers[i];
+    output += F("solar_prognose_monitor_modbus_register_valid{");
+    output += prometheusRegisterLabels(reg);
+    output += reg.valid && isfinite(reg.value) ? F("} 1\n") : F("} 0\n");
+  }
+  output += F("# HELP solar_prognose_monitor_modbus_register_age_seconds Age of the latest valid Modbus register value in seconds.\n");
+  output += F("# TYPE solar_prognose_monitor_modbus_register_age_seconds gauge\n");
+  for (size_t i = 0; i < REGISTER_COUNT; ++i) {
+    const RegisterDef &reg = registers[i];
+    if (!reg.valid || !isfinite(reg.value)) continue;
+    output += F("solar_prognose_monitor_modbus_register_age_seconds{");
+    output += prometheusRegisterLabels(reg);
+    output += F("} ");
+    output += String(reg.updatedAt == 0 ? 0 : (millis() - reg.updatedAt) / 1000UL);
+    output += '\n';
+  }
+
+  appendPrometheusAlias(output, "solar_prognose_monitor_pv_power_watts",
+                        "Current photovoltaic power in watts.",
+                        SourceGroup::INVERTER, 5016);
+  appendPrometheusAlias(output, "solar_prognose_monitor_load_power_watts",
+                        "Current site load in watts.",
+                        SourceGroup::INVERTER, 13007);
+  appendPrometheusAlias(output, "solar_prognose_monitor_grid_power_watts",
+                        "Current power at the grid connection point in watts.",
+                        SourceGroup::INVERTER, 13009);
+  appendPrometheusAlias(output, "solar_prognose_monitor_battery_power_watts",
+                        "Current battery power in watts.",
+                        SourceGroup::INVERTER, 13021);
+  appendPrometheusAlias(output, "solar_prognose_monitor_battery_soc_percent",
+                        "Current absolute battery state of charge in percent.",
+                        SourceGroup::BATTERY, 10743);
+  appendPrometheusAlias(output, "solar_prognose_monitor_battery_soh_percent",
+                        "Current battery state of health in percent.",
+                        SourceGroup::BATTERY, 10744);
+  appendPrometheusAlias(output, "solar_prognose_monitor_grid_frequency_hertz",
+                        "Current grid frequency in hertz.",
+                        SourceGroup::INVERTER, 5035);
+  appendPrometheusAlias(output, "solar_prognose_monitor_pv_energy_today_kilowatt_hours",
+                        "Photovoltaic energy generated today in kilowatt-hours.",
+                        SourceGroup::INVERTER, 13001);
+  appendPrometheusAlias(output, "solar_prognose_monitor_pv_energy_total_kilowatt_hours",
+                        "Total photovoltaic energy generated in kilowatt-hours.",
+                        SourceGroup::INVERTER, 13002);
+  appendPrometheusAlias(output, "solar_prognose_monitor_grid_import_total_kilowatt_hours",
+                        "Total imported grid energy in kilowatt-hours.",
+                        SourceGroup::METER, 5746);
+  appendPrometheusAlias(output, "solar_prognose_monitor_grid_export_total_kilowatt_hours",
+                        "Total exported grid energy in kilowatt-hours.",
+                        SourceGroup::METER, 5748);
+  return output;
 }
 
 float currentBatterySoc() {
@@ -4924,9 +5414,23 @@ void addNoCacheHeaders() {
   server.sendHeader("Pragma", "no-cache");
 }
 
-void handleIndex() {
+void injectMqttNavigation(String &page) {
+  if (page.indexOf("href=\"/mqtt\"") >= 0 || page.indexOf("href='/mqtt'") >= 0) return;
+  page.replace("<a href=\"/settings\">Einstellungen</a>",
+               "<a href=\"/mqtt\">Daten</a><a href=\"/settings\">Einstellungen</a>");
+  page.replace("<a class=\"active\" aria-current=\"page\" href=\"/settings\">Einstellungen</a>",
+               "<a href=\"/mqtt\">Daten</a><a class=\"active\" aria-current=\"page\" href=\"/settings\">Einstellungen</a>");
+}
+
+void sendHtmlPageWithMqttNavigation(const char *pageInProgramMemory) {
+  String page(reinterpret_cast<const __FlashStringHelper *>(pageInProgramMemory));
+  injectMqttNavigation(page);
   addNoCacheHeaders();
-  server.send_P(200, "text/html; charset=utf-8", INDEX_HTML);
+  server.send(200, "text/html; charset=utf-8", page);
+}
+
+void handleIndex() {
+  sendHtmlPageWithMqttNavigation(INDEX_HTML);
 }
 
 String gpioSelectOptions(uint8_t selectedGpio) {
@@ -4975,13 +5479,36 @@ void handleSettings() {
   addNoCacheHeaders();
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server.send(200, "text/html; charset=utf-8", "");
-  sendChunk(FPSTR(SETTINGS_HEAD));
+  String settingsHead(FPSTR(SETTINGS_HEAD));
+  injectMqttNavigation(settingsHead);
+  sendChunk(settingsHead);
 
   String part;
-  part.reserve(3000);
+  part.reserve(5200);
   part = F("<form id='settingsForm' method='post' action='/save'><section class='card'><h2>WLAN</h2><div class='grid'><div class='full'><label for='ssid'>WLAN-Name (SSID)</label><input id='ssid' name='ssid' maxlength='32' value='");
   part += htmlEscape(config.wifiSsid);
   part += F("' autocomplete='off'></div><div class='full'><label for='password'>WLAN-Passwort</label><input id='password' name='password' type='password' maxlength='64' placeholder='Leer lassen, um das gespeicherte Passwort beizubehalten'><p class='hint'>Das gespeicherte Passwort wird nicht im Browser angezeigt.</p></div><div class='full'><label class='check'><input type='checkbox' name='clearWifi' value='1'> Gespeicherte WLAN-Zugangsdaten löschen</label></div></div></section>");
+  part += F("<section class='card'><h2>Externe Datenweitergabe über MQTT</h2><div class='grid'><label class='check full'><input type='checkbox' name='mqEnabled' value='1'");
+  if (config.mqttEnabled) part += F(" checked");
+  part += F("> Messwerte an einen MQTT-Broker senden</label><div class='caution full'><b>Sicherheitsprinzip:</b> Der Solar Prognose Monitor veröffentlicht nur Daten und abonniert keinerlei MQTT-Topic. Über MQTT können deshalb keine Register, Ausgänge oder Steuerungswerte verändert werden. Die Verbindung ist für einen vertrauenswürdigen lokalen Broker oder ein VPN vorgesehen und derzeit nicht TLS-verschlüsselt.</div><div class='full'><label for='mqHost'>Broker-IP oder Hostname</label><input id='mqHost' name='mqHost' maxlength='64' value='");
+  part += htmlEscape(config.mqttHost);
+  part += F("' placeholder='192.168.0.10'></div><label for='mqPort'>Broker-Port<input id='mqPort' name='mqPort' type='number' min='1' max='65535' value='");
+  part += String(config.mqttPort);
+  part += F("'></label><label for='mqInterval'>Sendeintervall (Sekunden)<input id='mqInterval' name='mqInterval' type='number' min='5' max='3600' value='");
+  part += String(config.mqttPublishIntervalSeconds);
+  part += F("'></label><div><label for='mqUser'>Benutzername</label><input id='mqUser' name='mqUser' maxlength='64' value='");
+  part += htmlEscape(config.mqttUsername);
+  part += F("' autocomplete='off'></div><div><label for='mqPassword'>Passwort</label><input id='mqPassword' name='mqPassword' type='password' maxlength='128' data-stored='");
+  part += config.mqttPassword.isEmpty() ? F("0") : F("1");
+  part += F("' placeholder='Leer lassen, um das gespeicherte Passwort beizubehalten' autocomplete='new-password'></div><label class='check full'><input type='checkbox' name='mqClearCredentials' value='1'> MQTT-Benutzername und Passwort löschen</label><div class='full'><label for='mqTopic'>Basistopic</label><input id='mqTopic' name='mqTopic' maxlength='160' value='");
+  part += htmlEscape(config.mqttBaseTopic);
+  part += F("'><p class='hint'>Keine Platzhalter <code>+</code> oder <code>#</code>. Veröffentlicht werden unter anderem <code>/state</code>, <code>/availability</code>, <code>/metrics/…</code> und <code>/register/…</code>.</p></div><label class='check full'><input type='checkbox' name='mqRetain' value='1'");
+  if (config.mqttRetainValues) part += F(" checked");
+  part += F("> Letzte Messwerte im Broker behalten (Retain)</label><label class='check full'><input type='checkbox' name='mqHa' value='1'");
+  if (config.mqttHomeAssistantDiscovery) part += F(" checked");
+  part += F("> Home-Assistant-MQTT-Discovery veröffentlichen</label><div class='full'><label for='mqHaPrefix'>Home-Assistant-Discovery-Präfix</label><input id='mqHaPrefix' name='mqHaPrefix' maxlength='80' value='");
+  part += htmlEscape(config.mqttDiscoveryPrefix);
+  part += F("'><p class='hint'>Standard: <code>homeassistant</code>. ioBroker, Node-RED, Telegraf und InfluxDB benötigen die Discovery-Option nicht.</p></div></div></section>");
   part += F("<section class='card'><h2>Modbus-Verbindung</h2><div class='grid'><div class='full'><label for='mbMode'>Betriebsart</label><select id='mbMode' name='mbMode'><option value='0'");
   if (selectedModbusMode() == ModbusMode::TCP_ONLY) part += F(" selected");
   part += F(">Nur Modbus TCP</option><option value='1'");
@@ -5284,6 +5811,8 @@ void handleSave() {
   const bool bypassWasActive = config.forecastEnabled && config.forecastBypass;
   const bool rippleWasEnabled = config.rippleEnabled;
   const bool updateNotificationWasEnabled = config.pushoverNotifyUpdate;
+  const bool mqttDiscoveryWasEnabled = config.mqttHomeAssistantDiscovery;
+  const String previousMqttDiscoveryPrefix = config.mqttDiscoveryPrefix;
   const uint8_t previousMaxSoc = config.maxSoc;
   if ((tariff.charging || tariff.recoveryPending)
       && !stopTariffGridCharge("Einstellungen werden geändert")) {
@@ -5291,6 +5820,7 @@ void handleSave() {
                 "Einstellungen nicht übernommen: Die aktive Netzladung konnte nicht sicher beendet werden.");
     return;
   }
+  mqttPublisher.disconnect(true);
   forceAllStagesOff(true);
   if (server.hasArg("clearWifi")) {
     config.wifiSsid = "";
@@ -5336,6 +5866,35 @@ void handleSave() {
   if (config.pushoverNotifyUpdate && !updateNotificationWasEnabled) {
     lastVersionCheckEpoch = 0;  // Nach dem Aktivieren direkt nach einer neuen Version suchen.
   }
+
+  config.mqttEnabled = server.hasArg("mqEnabled");
+  config.mqttHost = server.arg("mqHost");
+  config.mqttHost.trim();
+  config.mqttPort = static_cast<uint16_t>(boundedNumberArgument(
+      "mqPort", ConfigDefaults::MQTT_PORT, 1, 65535));
+  if (server.hasArg("mqClearCredentials")) {
+    config.mqttUsername = "";
+    config.mqttPassword = "";
+  } else {
+    config.mqttUsername = server.arg("mqUser");
+    config.mqttUsername.trim();
+    String submittedMqttPassword = server.arg("mqPassword");
+    if (!submittedMqttPassword.isEmpty()) config.mqttPassword = submittedMqttPassword;
+    if (config.mqttUsername.isEmpty()) config.mqttPassword = "";
+  }
+  config.mqttBaseTopic = normalizeMqttTopic(server.arg("mqTopic"), defaultMqttBaseTopic());
+  config.mqttPublishIntervalSeconds = static_cast<uint16_t>(boundedNumberArgument(
+      "mqInterval", ConfigDefaults::MQTT_PUBLISH_INTERVAL_SECONDS, 5, 3600));
+  config.mqttRetainValues = server.hasArg("mqRetain");
+  config.mqttHomeAssistantDiscovery = server.hasArg("mqHa");
+  config.mqttDiscoveryPrefix = normalizeMqttTopic(server.arg("mqHaPrefix"), "homeassistant");
+  if (mqttDiscoveryWasEnabled
+      && (!config.mqttHomeAssistantDiscovery
+          || config.mqttDiscoveryPrefix != previousMqttDiscoveryPrefix)) {
+    mqttDiscoveryCleanupPending = true;
+    mqttDiscoveryCleanupPrefix = previousMqttDiscoveryPrefix;
+  }
+  if (config.mqttHost.isEmpty()) config.mqttEnabled = false;
 
   config.tariffPlanningEnabled = server.hasArg("tPlan");
   config.tariffAutomationApproved = config.tariffPlanningEnabled && server.hasArg("tAuto");
@@ -5632,6 +6191,10 @@ void handleValuesApi() {
   sendChunk(String());
 }
 
+const char MQTT_HTML[] PROGMEM = R"HTML(
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Datenweitergabe · Solar Prognose Monitor</title><style>:root{--bg:#f3f5f7;--card:#fff;--text:#17212b;--muted:#64717d;--accent:#087f5b;--line:#dfe4e8;--bad:#b42318;--warn:#fff7e0}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{background:#fff;border-bottom:1px solid var(--line)}.bar{max-width:1120px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}.nav{display:flex;gap:6px;overflow-x:auto}.nav a{white-space:nowrap;color:var(--text);text-decoration:none;padding:8px 10px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}main{max-width:1120px;margin:22px auto;padding:0 18px}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}.metric span,.muted{color:var(--muted)}.metric b{display:block;font-size:20px;margin-top:5px;word-break:break-word}.ok{color:var(--accent)}.bad{color:var(--bad)}.warn{background:var(--warn);line-height:1.55}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;border-bottom:1px solid var(--line);vertical-align:top}th{width:220px;color:var(--muted)}code{word-break:break-all}.button{border:0;border-radius:9px;background:var(--accent);color:#fff;padding:10px 14px;font:inherit;font-weight:650;cursor:pointer}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}@media(max-width:800px){.cards{grid-template-columns:1fr 1fr}.bar{align-items:flex-start;flex-wrap:wrap}.nav{width:100%}}@media(max-width:480px){.cards{grid-template-columns:1fr}}.skip-link{position:fixed;left:12px;top:8px;z-index:20;transform:translateY(-150%);background:#fff;color:#17212b;padding:10px 14px;border:2px solid var(--accent);border-radius:8px}.skip-link:focus{transform:none}:focus-visible{outline:3px solid #005fcc;outline-offset:3px}</style></head><body><a class="skip-link" href="#main">Zum Hauptinhalt springen</a><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav" aria-label="Hauptnavigation"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a href="/tariff">Stromtarif</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a class="active" aria-current="page" href="/mqtt">Daten</a><a href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header><main id="main" tabindex="-1"><div class="cards" id="metrics"><section class="card metric"><span>Status</span><b>Wird geladen …</b></section></div><section class="card"><h2>MQTT-Verbindung</h2><table><tbody id="details"></tbody></table><div class="row"><button id="publish" class="button" type="button">Messwerte jetzt senden</button><span id="result" class="muted" role="status" aria-live="polite"></span></div></section><section class="card warn"><h2>Nur lesende Schnittstelle</h2><p>Der ESP32 veröffentlicht Messwerte, Status und Metadaten. Er abonniert absichtlich keine MQTT-Topics. Home Assistant, ioBroker, Node-RED oder Telegraf können die Daten lesen, aber über diese Schnittstelle keine Modbus-Register, Ausgänge oder Einstellungen verändern.</p><p>Die derzeitige MQTT-Verbindung ist für das vertrauenswürdige Heimnetz oder ein VPN vorgesehen. Broker-Port 1883 darf nicht ungeschützt aus dem Internet erreichbar sein.</p></section><section class="card"><h2>Topic-Aufbau</h2><table><tr><th scope="row">Gesamtzustand</th><td><code id="stateTopic">—</code></td></tr><tr><th scope="row">Verfügbarkeit</th><td><code id="availabilityTopic">—</code></td></tr><tr><th scope="row">Einfache Messwerte</th><td><code id="metricsTopic">—</code></td></tr><tr><th scope="row">Modbusregister</th><td><code id="registerTopic">—</code></td></tr></table><p class="muted">Beispiele für einfache Messwerte: <code>pv_power_w</code>, <code>load_power_w</code>, <code>grid_power_w</code>, <code>battery_power_w</code>, <code>battery_soc_percent</code> und <code>grid_frequency_hz</code>.</p></section></main><script>const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function load(){try{const r=await fetch('/api/mqtt',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const d=await r.json(),klass=d.connected?'ok':(d.enabled?'bad':'muted');document.querySelector('#metrics').innerHTML=`<section class="card metric"><span>Betrieb</span><b class="${klass}">${d.enabled?(d.connected?'Verbunden':'Getrennt'):'Deaktiviert'}</b></section><section class="card metric"><span>Status</span><b>${esc(d.status)}</b></section><section class="card metric"><span>Letzte Sendung</span><b>${esc(d.lastPublish)}</b></section><section class="card metric"><span>Nachrichten seit Start</span><b>${d.messages}</b></section>`;const rows=[['Broker',d.broker||'—'],['Client-ID',d.clientId],['Basistopic',d.baseTopic],['Sendeintervall',d.interval+' Sekunden'],['Retain',d.retain?'aktiv':'aus'],['Home-Assistant-Discovery',d.discovery?'aktiv':'aus']];document.querySelector('#details').innerHTML=rows.map(x=>'<tr><th scope="row">'+esc(x[0])+'</th><td>'+esc(x[1])+'</td></tr>').join('');document.querySelector('#stateTopic').textContent=d.baseTopic+'/state';document.querySelector('#availabilityTopic').textContent=d.baseTopic+'/availability';document.querySelector('#metricsTopic').textContent=d.baseTopic+'/metrics/#';document.querySelector('#registerTopic').textContent=d.baseTopic+'/register/#'}catch(e){document.querySelector('#result').textContent='Fehler: '+e.message}}document.querySelector('#publish').addEventListener('click',async()=>{const out=document.querySelector('#result');out.textContent='Wird gesendet …';try{const r=await fetch('/api/mqtt/publish',{method:'POST'});out.textContent=await r.text();setTimeout(load,500)}catch(e){out.textContent='Fehler: '+e.message}});load();setInterval(load,5000)</script></body></html>
+)HTML";
+
 const char TARIFF_HTML[] PROGMEM = R"HTML(
 <!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Stromtarif · Solar Prognose Monitor</title><style>:root{--bg:#f3f5f7;--card:#fff;--text:#17212b;--muted:#64717d;--accent:#087f5b;--blue:#2673c9;--orange:#d97706;--line:#dfe4e8;--bad:#b42318}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{background:#fff;border-bottom:1px solid var(--line)}.bar{max-width:1120px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}.nav{display:flex;gap:6px;overflow-x:auto}.nav a{white-space:nowrap;color:var(--text);text-decoration:none;padding:8px 10px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}main{max-width:1120px;margin:22px auto;padding:0 18px}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}.metric b{display:block;font-size:22px;margin-top:5px}.muted{color:var(--muted)}.ok{color:var(--accent)}.bad{color:var(--bad)}.warn{background:#fff7e0;border-color:#e9b949;line-height:1.55}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.button{border:0;border-radius:9px;background:var(--accent);color:#fff;padding:10px 14px;font:inherit;font-weight:650;cursor:pointer}canvas{display:block;width:100%;height:280px}.scroll{overflow:auto}table{width:100%;border-collapse:collapse}th,td{text-align:right;padding:8px;border-bottom:1px solid var(--line);white-space:nowrap}th:first-child,td:first-child{text-align:left}.chosen{background:#e6f4ef}@media(max-width:800px){.cards{grid-template-columns:1fr 1fr}.bar{align-items:flex-start;flex-wrap:wrap}.nav{width:100%}}@media(max-width:480px){.cards{grid-template-columns:1fr}}.skip-link{position:fixed;left:12px;top:8px;z-index:20;transform:translateY(-150%);background:#fff;color:#17212b;padding:10px 14px;border:2px solid var(--accent);border-radius:8px}.skip-link:focus{transform:none}:focus-visible{outline:3px solid #005fcc;outline-offset:3px}.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}</style></head><body><a class="skip-link" href="#main">Zum Hauptinhalt springen</a><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav" aria-label="Hauptnavigation"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a class="active" aria-current="page" href="/tariff">Stromtarif</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header><main id="main" tabindex="-1"><div class="cards" id="metrics"><section class="card metric"><span class="muted">Status</span><b>Wird geladen …</b></section></div><section class="card"><div class="row"><button id="refresh" class="button">Preise und Plan neu laden</button><span id="message" class="muted" role="status" aria-live="polite" aria-atomic="true"></span></div></section><section class="card warn"><b>Sicherheitsprinzip</b><br>„Planen“ führt keine Schreibzugriffe aus. Automatisches Laden benötigt die zusätzliche Freigabe unter Einstellungen. Die vom Installateur festgelegte Ladeleistung und sämtliche BMS-/Stromgrenzen werden niemals verändert. Bei fehlenden oder unplausiblen Lesewerten, veralteten Preisen, fehlendem Wetter, fehlendem Batterie-SOC oder Inselbetrieb wird nicht gestartet beziehungsweise gestoppt.</section><section class="card"><h2>Preisverlauf und ausgewählte Ladefenster</h2><canvas id="chart" role="img" aria-label="Preisverlauf. Ausgewählte günstige Ladefenster sind grün markiert."></canvas></section><section class="card"><div class="scroll"><table><caption class="sr-only">Strompreise und ausgewählte Ladefenster</caption><thead><tr><th scope="col">Beginn</th><th scope="col">Ende</th><th scope="col">Preis</th><th scope="col">Plan</th></tr></thead><tbody id="rows"></tbody></table></div></section></main><script>let state=null;const f=(n,d=1)=>Number.isFinite(Number(n))?Number(n).toFixed(d):'—',esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));function draw(){const cv=document.querySelector('#chart'),p=state?.prices||[],dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;cv.width=w*dpr;cv.height=h*dpr;const c=cv.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);if(!p.length)return;const left=45,right=10,top=20,bottom=48,pw=w-left-right,ph=h-top-bottom,min=Math.min(0,...p.map(x=>x.price)),max=Math.max(min+1,...p.map(x=>x.price));for(let i=0;i<=4;i++){const y=top+ph*i/4;c.strokeStyle='#dfe4e8';c.beginPath();c.moveTo(left,y);c.lineTo(w-right,y);c.stroke();c.fillStyle='#64717d';c.font='11px system-ui';c.fillText(f(max-(max-min)*i/4,0),2,y+4)}p.forEach((x,i)=>{const x0=left+pw*i/p.length,x1=left+pw*(i+1)/p.length,y=top+ph-(x.price-min)/(max-min)*ph;c.fillStyle=x.selected?'#087f5b':'#2673c9';c.fillRect(x0,y,Math.max(1,x1-x0-1),top+ph-y)});const ticks=w<520?4:7;for(let j=0;j<ticks;j++){const i=Math.round((p.length-1)*j/(ticks-1)),x=left+pw*i/p.length;c.fillStyle='#64717d';c.textAlign=j===0?'left':j===ticks-1?'right':'center';c.fillText(p[i].start,x,top+ph+20)}}function render(d){state=d;const s=d.status,mode=s.automation?'Automatik freigegeben':(s.planning?'Nur planen':'Aus');document.querySelector('#metrics').innerHTML=`<section class="card metric"><span class="muted">Betrieb</span><b class="${s.charging?'ok':''}">${esc(mode)}</b><small>${esc(s.text)}</small></section><section class="card metric"><span class="muted">Prognose morgen / Lücke</span><b>${f(s.predictedSoc)} % / ${f(s.missingKwh,2)} kWh</b><small>Ziel: ${s.targetSoc} %</small></section><section class="card metric"><span class="muted">Netzladeplan</span><b>${f(s.gridKwh,2)} kWh · ${f(s.costEuro,2)} €</b><small>Ziel-SOC aus Netz: ${f(s.gridTargetSoc)} %</small></section><section class="card metric"><span class="muted">Sichere Ladeleistung</span><b>${s.forcedPower||'—'} W</b><small>Maximalwert gelesen: ${s.maximumPower||'—'} W</small></section>`;document.querySelector('#message').textContent=s.fetched?'Preise geladen: '+s.fetched:'';document.querySelector('#rows').innerHTML=d.prices.map(x=>`<tr class="${x.selected?'chosen':''}"><td>${esc(x.start)}</td><td>${esc(x.end)}</td><td>${f(x.price,2)} ${esc(s.priceUnit)}</td><td>${x.selected?'Laden':'—'}</td></tr>`).join('');draw()}async function load(){try{const r=await fetch('/api/tariff',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);render(await r.json())}catch(e){document.querySelector('#message').textContent='Fehler: '+e.message}}document.querySelector('#refresh').addEventListener('click',async()=>{await fetch('/api/tariff/refresh',{method:'POST'});document.querySelector('#message').textContent='Abruf eingeplant …';setTimeout(load,1500)});load();setInterval(load,15000);addEventListener('resize',draw);</script></body></html>
 )HTML";
@@ -5681,9 +6244,79 @@ const load=async()=>{try{const hours=document.querySelector('#range').value,r=aw
 </script></body></html>
 )HTML";
 
-void handleTariffPage() {
+void handleMqttPage() {
   addNoCacheHeaders();
-  server.send_P(200, "text/html; charset=utf-8", TARIFF_HTML);
+  String page = FPSTR(MQTT_HTML);
+  page.replace(
+      "</main>",
+      "<section class='card'><h2>Prometheus und Grafana</h2>"
+      "<p>Prometheus kann die aktuellen Messwerte direkt vom ESP32 abrufen. "
+      "Grafana verwendet anschließend Prometheus als Datenquelle.</p>"
+      "<table><tr><th scope='row'>Prometheus-Endpunkt</th>"
+      "<td><a href='/metrics'><code>/metrics</code></a></td></tr>"
+      "<tr><th scope='row'>Zugriff</th><td>Nur lesend, keine Steuerbefehle</td></tr></table>"
+      "<p class='muted'>In Prometheus als Ziel <code>http://ESP-IP/metrics</code> "
+      "eintragen. Grafana greift nicht direkt auf den ESP32 zu.</p></section></main>");
+  server.send(200, "text/html; charset=utf-8", page);
+}
+
+void handleMqttApi() {
+  String json;
+  json.reserve(800);
+  json = F("{\"enabled\":");
+  json += config.mqttEnabled ? F("true") : F("false");
+  json += F(",\"connected\":");
+  json += mqttPublisher.connected() ? F("true") : F("false");
+  json += F(",\"status\":\"");
+  json += jsonEscape(mqttStatus);
+  json += F("\",\"broker\":\"");
+  if (!config.mqttHost.isEmpty()) json += jsonEscape(config.mqttHost + ":" + String(config.mqttPort));
+  json += F("\",\"clientId\":\"");
+  json += mqttClientId();
+  json += F("\",\"baseTopic\":\"");
+  json += jsonEscape(config.mqttBaseTopic);
+  json += F("\",\"interval\":");
+  json += String(config.mqttPublishIntervalSeconds);
+  json += F(",\"retain\":");
+  json += config.mqttRetainValues ? F("true") : F("false");
+  json += F(",\"discovery\":");
+  json += config.mqttHomeAssistantDiscovery ? F("true") : F("false");
+  json += F(",\"messages\":");
+  json += String(mqttPublishedMessages);
+  json += F(",\"lastPublish\":\"");
+  json += lastMqttPublishAt == 0
+      ? String("noch nicht gesendet")
+      : String((millis() - lastMqttPublishAt) / 1000UL) + " Sekunden zuvor";
+  json += F("\"}");
+  addNoCacheHeaders();
+  server.send(200, "application/json; charset=utf-8", json);
+}
+
+void handleMqttPublishNow() {
+  if (!config.mqttEnabled) {
+    server.send(409, "text/plain; charset=utf-8", "MQTT ist in den Einstellungen deaktiviert.");
+    return;
+  }
+  if (!mqttPublisher.connected()) {
+    nextMqttConnectAt = millis();
+    server.send(503, "text/plain; charset=utf-8", "MQTT ist noch nicht verbunden; Neuverbindung wurde eingeplant.");
+    return;
+  }
+  const bool success = publishMqttSnapshot();
+  nextMqttPublishAt = millis()
+      + static_cast<uint32_t>(config.mqttPublishIntervalSeconds) * 1000UL;
+  server.send(success ? 200 : 503, "text/plain; charset=utf-8",
+              success ? "Messwerte wurden an den MQTT-Broker gesendet." : mqttStatus);
+}
+
+void handlePrometheusMetrics() {
+  addNoCacheHeaders();
+  server.send(200, "text/plain; version=0.0.4; charset=utf-8",
+              buildPrometheusMetrics());
+}
+
+void handleTariffPage() {
+  sendHtmlPageWithMqttNavigation(TARIFF_HTML);
 }
 
 void handleTariffApi() {
@@ -5731,18 +6364,15 @@ void handleTariffRefresh() {
 }
 
 void handleForecastPage() {
-  addNoCacheHeaders();
-  server.send_P(200, "text/html; charset=utf-8", FORECAST_HTML);
+  sendHtmlPageWithMqttNavigation(FORECAST_HTML);
 }
 
 void handleLoadProfilePage() {
-  addNoCacheHeaders();
-  server.send_P(200, "text/html; charset=utf-8", LOAD_PROFILE_HTML);
+  sendHtmlPageWithMqttNavigation(LOAD_PROFILE_HTML);
 }
 
 void handleHistoryPage() {
-  addNoCacheHeaders();
-  server.send_P(200, "text/html; charset=utf-8", HISTORY_HTML);
+  sendHtmlPageWithMqttNavigation(HISTORY_HTML);
 }
 
 void handleForecastApi() {
@@ -5976,6 +6606,7 @@ const char ABOUT_HTML[] PROGMEM = R"HTML(
 
 void handleFirmwarePage() {
   String page = FPSTR(FIRMWARE_HTML);
+  injectMqttNavigation(page);
   page.replace(
       F("Stelle „Erase All Flash Before Sketch Upload“ auf <b>Disabled</b>, damit Einstellungen, Lernprofil und der bisherige 24-Stunden-Verlauf automatisch migriert werden können. Eine USB-Komplett-/Factory-Datei löscht diese Daten und ist nur für Neuinstallationen gedacht."),
       F("Für eine Neuinstallation auf einem frischen ESP32 ist Version 1.0.1 oder neuer erforderlich; Version 1.0.0 konnte dort wegen eines falschen App-Offsets nicht starten. Eine USB-Komplett-/Factory-Datei ist nur für Neuinstallationen gedacht und löscht vorhandene Daten. Bereits laufende Geräte erhalten die passende normale Update-Datei über diese Seite."));
@@ -5992,6 +6623,7 @@ void handleVersionCheck() {
 
 void handleAboutPage() {
   String page = FPSTR(ABOUT_HTML);
+  injectMqttNavigation(page);
   const esp_partition_t *running = esp_ota_get_running_partition();
   const esp_partition_t *nvs = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, "nvs");
   const esp_partition_t *profileNvs = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS,
@@ -6085,6 +6717,7 @@ void handleFirmwareUpload() {
     }
     firmwareUpdateInProgress = true;
     browserUpdateMessage = "Upload wird vorbereitet";
+    mqttPublisher.disconnect(true);
     // Auch den noch nicht abgeschlossenen Viertelstundenblock übernehmen und
     // das vollständige Lernprofil sichern, bevor die App-Partition verändert
     // wird. Ein normales Browser-Update lässt die NVS-Partition unangetastet.
@@ -6217,6 +6850,7 @@ void startWebServer() {
   server.on("/tariff", HTTP_GET, handleTariffPage);
   server.on("/load-profile", HTTP_GET, handleLoadProfilePage);
   server.on("/history", HTTP_GET, handleHistoryPage);
+  server.on("/mqtt", HTTP_GET, handleMqttPage);
   server.on("/settings", HTTP_GET, handleSettings);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/firmware", HTTP_GET, handleFirmwarePage);
@@ -6229,6 +6863,9 @@ void startWebServer() {
   server.on("/api/load-profile", HTTP_GET, handleLoadProfileApi);
   server.on("/api/load-profile/reset", HTTP_POST, handleLoadProfileReset);
   server.on("/api/history", HTTP_GET, handleHistoryApi);
+  server.on("/api/mqtt", HTTP_GET, handleMqttApi);
+  server.on("/api/mqtt/publish", HTTP_POST, handleMqttPublishNow);
+  server.on("/metrics", HTTP_GET, handlePrometheusMetrics);
   server.on("/api/pushover/test", HTTP_POST, handlePushoverTest);
   server.on("/api/version-check", HTTP_POST, handleVersionCheck);
   server.on("/about", HTTP_GET, handleAboutPage);
@@ -6256,6 +6893,7 @@ void solarPrognoseMonitorSetup() {
   initializeRippleInputs();
   initializeRs485();
   startNetwork();
+  configureMqttPublisher();
   if (WiFi.status() == WL_CONNECTED) {
     configTime(0, 0, "pool.ntp.org", "time.cloudflare.com", "time.google.com");
     timeSyncStarted = true;
@@ -6282,6 +6920,8 @@ void solarPrognoseMonitorSetup() {
   nextTariffFetchAt = millis();
   nextTariffControlAt = millis() + 45000UL;
   nextTariffPlanAt = millis();
+  nextMqttConnectAt = millis();
+  nextMqttPublishAt = millis();
 }
 
 void solarPrognoseMonitorLoop() {
@@ -6313,6 +6953,7 @@ void solarPrognoseMonitorLoop() {
     serviceTariffControl();
     servicePushover();
     serviceVersionCheck();
+    serviceMqtt();
   }
 
   if (restartAt != 0 && timeReached(restartAt)) {

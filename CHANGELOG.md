@@ -2,6 +2,25 @@
 
 ## Unveröffentlicht
 
+## 1.5.1 – 2026-10-26
+
+- benennt die MQTT-Option verständlicher in „Messwerte an einen MQTT-Broker senden“ um
+- ergänzt den ausschließlich lesenden Prometheus-Endpunkt `/metrics` im Prometheus-Textformat
+- stellt Systemzustand, Verfügbarkeit, sämtliche gültigen Modbusregister sowie wichtige Messwerte unter stabilen Metriknamen bereit
+- ergänzt im Tab **Daten** den direkten Endpunkt und beschreibt die Anbindung von Prometheus und Grafana
+- behält die Sicherheitsgrenze bei: Prometheus und Grafana können keine Steuer-, Einstellungs- oder Modbus-Schreibbefehle senden
+
+## 1.5.0 – 2026-10-22
+
+- ergänzt eine ausschließlich sendende MQTT-3.1.1-Schnittstelle ohne abonnierte Steuer- oder Schreibtopics
+- veröffentlicht einen gemeinsamen JSON-Zustand, retained Verfügbarkeit, verständliche Metriktopics und alle gültigen Modbuswerte als einzelne Registertopics
+- ergänzt retained Metadaten mit Registeradresse, Quelle, Beschreibung, Einheit und Nachkommastellen
+- unterstützt Brokeradresse, Port, optionalen Benutzernamen und Passwort, frei wählbares Basistopic, Sendeintervall und Retain
+- ergänzt optionale Home-Assistant-MQTT-Discovery für sämtliche 22 gelesenen Register
+- ergänzt den barrierearmen Tab **Daten** mit Verbindungsstatus, Topic-Beispielen und manueller Testveröffentlichung
+- arbeitet ohne zusätzliche Arduino-Bibliothek und bleibt mit ESP32 Arduino Core 3.3.8 sowie 4- und 8-MB-Partitionierung kompatibel
+- dokumentiert die Einbindung in Home Assistant, ioBroker, Node-RED sowie Telegraf/InfluxDB und weist auf den ausschließlich lokalen, derzeit unverschlüsselten MQTT-Transport hin
+
 ## 1.4.0 – 2026-10-22
 
 - verbessert die Bedienbarkeit der gesamten Weboberfläche mit VoiceOver, anderen Screenreadern und der Tastatur

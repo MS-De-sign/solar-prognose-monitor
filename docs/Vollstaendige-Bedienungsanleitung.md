@@ -1,6 +1,6 @@
 # Vollständige Bedienungsanleitung
 
-Stand: Firmware **1.2.0**
+Stand: Firmware **1.5.1**
 
 Diese Anleitung beschreibt jede Seite und jedes sichtbare Bedien- oder Anzeigefeld des Solar Prognose Monitors. Die mathematischen Hintergründe stehen bewusst gesammelt im letzten Kapitel. Die erste Geräteintegration unterstützt Sungrow-Wechselrichter und -Batteriespeicher.
 
@@ -151,9 +151,33 @@ Das Lernprofil wird mindestens stündlich und unmittelbar vor einem Browser-Firm
 
 Der Verlauf schreibt alle fünf Minuten einen kompakten Messpunkt in eine Tagesdatei der separaten LittleFS-Partition. Gespeichert werden bis zu 31 Tage. Die Tagesansicht verwendet 5-Minuten-Werte, die Wochenansicht bildet 15-Minuten-Mittelwerte und die Monatsansicht Stundenmittelwerte. Die X-Achse zeigt Datum und Uhrzeit. Fehlende Einzelwerte werden als Lücke dargestellt. Jeder neue Punkt wird geschrieben und direkt zurückgelesen; die Aufzeichnung läuft unabhängig von Prognose oder Bypass. Tagesdateien außerhalb der Aufbewahrungsfrist werden automatisch entfernt.
 
-## 9. Tab „Einstellungen“
+## 9. Tab „Daten“
 
-**Speichern und neu starten** legt die Werte dauerhaft ab. Das WLAN-Passwort, der Stromtarif-API-Token sowie Pushover-Token und Pushover-User-Key werden nie zurück in das Formular geschrieben; leere Zugangsdatenfelder behalten den jeweiligen gespeicherten Wert, solange nicht ausdrücklich „löschen“ gewählt wird.
+Der Tab zeigt den Zustand der ausschließlich sendenden MQTT-Verbindung. Die vier
+Statuskarten nennen Betrieb, letzte Statusmeldung, Zeitpunkt der letzten
+Veröffentlichung und die Anzahl seit dem Start gesendeter MQTT-Nachrichten.
+
+Unter **MQTT-Verbindung** stehen Brokeradresse, Client-ID, Basistopic,
+Sendeintervall, Retain und Home-Assistant-Discovery. **Messwerte jetzt senden**
+löst bei bestehender Verbindung eine zusätzliche Veröffentlichung aus.
+
+Der Topic-Block zeigt die konkreten Topics für Gesamtzustand, Verfügbarkeit,
+vereinfachte Messwerte und Modbusregister. Die Schnittstelle abonniert keine
+Topics und kann deshalb keine externen Steuerbefehle annehmen. Der vollständige
+Aufbau und Beispiele für Home Assistant, ioBroker, Node-RED und Telegraf stehen
+in der [MQTT-Dokumentation](MQTT-Datenweitergabe.md).
+
+Der Abschnitt **Prometheus und Grafana** zeigt den ausschließlich lesenden
+Endpunkt `/metrics`. Ein Prometheus-Server ruft diesen Endpunkt regelmäßig über
+HTTP ab und speichert die Zeitreihen. Grafana wird anschließend mit Prometheus
+als Datenquelle verbunden; Grafana liest nicht direkt vom ESP32. Der Endpunkt
+enthält Gerätezustand, Verfügbarkeit, alle gültigen Register und zusätzliche
+stabile Namen für häufig verwendete Messwerte. Die vollständige Einrichtung
+steht in der [Prometheus-/Grafana-Dokumentation](Prometheus-Grafana.md).
+
+## 10. Tab „Einstellungen“
+
+**Speichern und neu starten** legt die Werte dauerhaft ab. Das WLAN-Passwort, MQTT-Passwort, der Stromtarif-API-Token sowie Pushover-Token und Pushover-User-Key werden nie zurück in das Formular geschrieben; leere Zugangsdatenfelder behalten den jeweiligen gespeicherten Wert, solange nicht ausdrücklich „löschen“ gewählt wird.
 
 ### WLAN
 
@@ -162,6 +186,25 @@ Der Verlauf schreibt alle fünf Minuten einen kompakten Messpunkt in eine Tagesd
 | WLAN-Name (SSID) | Name des Heimnetzes. |
 | WLAN-Passwort | Passwort des Heimnetzes. Leer lassen behält das gespeicherte Passwort. |
 | WLAN-Zugangsdaten löschen | Entfernt SSID und Passwort. Der Access Point bleibt erreichbar. |
+
+### Externe Datenweitergabe über MQTT
+
+| Feld | Wirkung |
+|---|---|
+| Messwerte an einen MQTT-Broker senden | Aktiviert den ausschließlich sendenden MQTT-Client. |
+| Broker-IP oder Hostname | Adresse eines Brokers im vertrauenswürdigen lokalen Netzwerk. |
+| Broker-Port | Normalerweise 1883. TLS ist in Version 1.5.1 noch nicht enthalten. |
+| Sendeintervall | Abstand von 5 bis 3.600 Sekunden zwischen vollständigen Veröffentlichungen. |
+| Benutzername / Passwort | Optionale Broker-Anmeldung. Ein leeres Passwortfeld behält ein bereits gespeichertes Passwort. |
+| MQTT-Zugangsdaten löschen | Entfernt Benutzername und Passwort. |
+| Basistopic | Eindeutige Topic-Wurzel ohne `+` oder `#`; standardmäßig mit ESP32-Kennung. |
+| Retain | Hält den letzten Wert jedes Topics im Broker verfügbar. |
+| Home-Assistant-Discovery | Erstellt retained Sensorkonfigurationen für alle 22 gelesenen Register. |
+| Discovery-Präfix | Normalerweise `homeassistant`. |
+
+MQTT arbeitet unabhängig von Modbus- und Steuerungsfunktionen. Ein Brokerausfall
+beeinflusst die Anlage nicht. Port 1883 darf nicht direkt ins Internet
+weitergeleitet werden; für entfernte Zugriffe ist ein VPN zu verwenden.
 
 ### Modbus
 
@@ -310,7 +353,7 @@ Die Verbindung zum offiziellen Endpunkt `https://api.pushover.net/1/messages.jso
 | WLAN-IP | Lokale Adresse im Heimnetz oder „nicht verbunden“. |
 | mDNS | Bequemer lokaler Name `http://solar-prognose-monitor.local`. |
 
-## 10. Tab „Firmware“
+## 11. Tab „Firmware“
 
 | Zeile/Bedienung | Bedeutung |
 |---|---|
@@ -323,7 +366,7 @@ Die Verbindung zum offiziellen Endpunkt `https://api.pushover.net/1/messages.jso
 
 ArduinoOTA ist nicht enthalten. Das Browserupdate bleibt nach der einmaligen USB-Erstinstallation der vorgesehene Netzwerk-Updateweg. Version 1.0.0 darf nicht zur Erstinstallation auf einem frischen ESP32 verwendet werden: Ihre Partitionstabelle erwartete die App bei `0x20000`, der ESP32 Arduino Core 3.3.8 schrieb sie jedoch bei `0x10000`. Ab Version 1.0.1 stimmen Upload- und Partitionsadresse überein. Ein bereits laufendes Gerät wird mit der passenden normalen `Update.bin` über den Browser aktualisiert. Ein Update ersetzt das Programm, nicht die normal gespeicherten Einstellungen, Lastprofildaten und Verlaufsdateien. Vor jedem Update werden Lernprofil und Verlauf geprüft. Schlägt das fehl, bricht das Update im Normalfall ab. Die Notfallfreigabe verhindert einen Wartungs-Lockout, kann aber den Verlust der nicht bestätigten Daten nicht verhindern. 4- und 8-MB-Firmware sowie unterschiedliche Partitionsschemata dürfen nicht vertauscht werden.
 
-## 11. Tab „About“
+## 12. Tab „About“
 
 | Zeile/Bedienung | Bedeutung |
 |---|---|
@@ -347,7 +390,7 @@ ArduinoOTA ist nicht enthalten. Das Browserupdate bleibt nach der einmaligen USB
 
 Web-Debug kostet nur bei Aktivierung zusätzlichen RAM für den Textpuffer. Die Einstellung dient der Diagnose und ist für den Normalbetrieb nicht erforderlich.
 
-## 12. Berechnungen und interne Abläufe
+## 13. Berechnungen und interne Abläufe
 
 ### 12.1 Skalierung wichtiger Modbuswerte
 
