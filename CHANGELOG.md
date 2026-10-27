@@ -2,6 +2,18 @@
 
 ## Unveröffentlicht
 
+## 1.7.0 – 2026-10-27
+
+- erweitert jeden 15-Minuten-Block um einen gleitenden Prognosefehler und eine daraus berechnete Verlässlichkeit
+- dämpft einmalige Großlast-Ausreißer deutlich; wiederkehrende Verbraucher erhalten erst nach mehreren passenden Beobachtungen zunehmend ihr volles Gewicht
+- schützt die gelernte Grundlast zusätzlich durch eine separat erlernte normale Grundlastschwankung; erkannte Großlasten heben ihre eigene Ausreißergrenze nicht mehr an
+- nutzt bei noch unsicheren Zeitfenstern einen auf höchstens 1,5 kW begrenzten Planungspuffer, der mit wachsender Verlässlichkeit automatisch abnimmt
+- verwendet bei noch ungelernten Wochentagen zuerst verlässlichkeitsgewichtet vergleichbare Werktage beziehungsweise Wochenendtage
+- zeigt Planwert, Beobachtungszahl, mittlere Abweichung und Verlässlichkeit im Lastprofil-Tab an
+- erzeugt die Hauptnavigation aller Web-Tabs zentral, sodass auf jeder Seite dieselben elf Tabs in derselben Reihenfolge vollständig sichtbar sind
+- übernimmt vorhandene Lernprofile aus Version 1.6 automatisch in das neue Format und kann auch portable 1.6-Sicherungen wiederherstellen
+- bleibt mit rund 1,47 MB Programmspeicher auf der 4-MB-Partition nutzbar
+
 ## 1.6.0 – 2026-10-26
 
 - ergänzt den neuen Tab **System** mit Geräte-, Speicher-, WLAN-, Modbus- und Batteriediagnose sowie einer übersichtlichen Einrichtungsprüfung

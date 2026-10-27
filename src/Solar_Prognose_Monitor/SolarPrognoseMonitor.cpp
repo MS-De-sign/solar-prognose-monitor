@@ -65,7 +65,7 @@
 */
 
 namespace ConfigDefaults {
-constexpr char FIRMWARE_VERSION[] = "1.6.0";
+constexpr char FIRMWARE_VERSION[] = "1.7.0";
 constexpr char MANUFACTURER[] = "MS-De-sign / Marcus Sonntag";
 constexpr char LICENSE_TEXT[] = "PolyForm Noncommercial License 1.0.0";
 constexpr char PROJECT_URL[] = "https://github.com/MS-De-sign/solar-prognose-monitor";
@@ -782,6 +782,17 @@ struct TariffState {
   TariffSlot slots[TARIFF_SLOT_COUNT];
 };
 
+struct LegacyLoadProfileDataV2 {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t baseWatts[LOAD_PROFILE_DAYS][LOAD_PROFILE_SLOTS];
+  uint16_t eventWatts[LOAD_PROFILE_DAYS][LOAD_PROFILE_SLOTS];
+  uint8_t eventProbability[LOAD_PROFILE_DAYS][LOAD_PROFILE_SLOTS];
+  uint8_t samples[LOAD_PROFILE_DAYS][LOAD_PROFILE_SLOTS];
+  uint16_t learnedDays[LOAD_PROFILE_DAYS];
+  uint32_t crc;
+};
+
 struct LoadProfileData {
   uint32_t magic;
   uint16_t version;
@@ -789,6 +800,13 @@ struct LoadProfileData {
   uint16_t eventWatts[LOAD_PROFILE_DAYS][LOAD_PROFILE_SLOTS];
   uint8_t eventProbability[LOAD_PROFILE_DAYS][LOAD_PROFILE_SLOTS];
   uint8_t samples[LOAD_PROFILE_DAYS][LOAD_PROFILE_SLOTS];
+  // Gleitender absoluter Prognosefehler je Wochentag und Viertelstunde.
+  // Er dient als Verlaesslichkeitsmass und Basis des Planungspuffers.
+  uint16_t deviationWatts[LOAD_PROFILE_DAYS][LOAD_PROFILE_SLOTS];
+  // Normale Schwankung der Grundlast. Sie bleibt von erkannten Grosslasten
+  // getrennt, damit wiederkehrende Ereignisse die Ausreissergrenze nicht
+  // selbst immer weiter anheben.
+  uint16_t baseDeviationWatts[LOAD_PROFILE_DAYS][LOAD_PROFILE_SLOTS];
   uint16_t learnedDays[LOAD_PROFILE_DAYS];
   uint32_t crc;
 };
@@ -952,7 +970,8 @@ struct __attribute__((packed)) BackupHistoryEntryV1 {
 };
 
 constexpr uint32_t LOAD_PROFILE_MAGIC = 0x53474C50UL;
-constexpr uint16_t LOAD_PROFILE_VERSION = 2;
+constexpr uint16_t LEGACY_LOAD_PROFILE_VERSION = 2;
+constexpr uint16_t LOAD_PROFILE_VERSION = 3;
 constexpr uint32_t HISTORY_MAGIC = 0x53474853UL;
 constexpr uint16_t HISTORY_VERSION = 1;
 constexpr uint32_t HISTORY_FILE_MAGIC = 0x53474846UL;
@@ -3656,6 +3675,42 @@ bool validLoadProfileBlob(const LoadProfileData &data) {
       && data.crc == loadProfileCrcFor(data);
 }
 
+uint32_t legacyLoadProfileCrcFor(const LegacyLoadProfileDataV2 &data) {
+  return crc32Bytes(reinterpret_cast<const uint8_t *>(&data), offsetof(LegacyLoadProfileDataV2, crc));
+}
+
+bool validLegacyLoadProfileBlob(const LegacyLoadProfileDataV2 &data) {
+  return data.magic == LOAD_PROFILE_MAGIC
+      && data.version == LEGACY_LOAD_PROFILE_VERSION
+      && data.crc == legacyLoadProfileCrcFor(data);
+}
+
+void migrateLegacyLoadProfile(const LegacyLoadProfileDataV2 &source, LoadProfileData &target) {
+  memset(&target, 0, sizeof(target));
+  target.magic = LOAD_PROFILE_MAGIC;
+  target.version = LOAD_PROFILE_VERSION;
+  memcpy(target.baseWatts, source.baseWatts, sizeof(source.baseWatts));
+  memcpy(target.eventWatts, source.eventWatts, sizeof(source.eventWatts));
+  memcpy(target.eventProbability, source.eventProbability, sizeof(source.eventProbability));
+  memcpy(target.samples, source.samples, sizeof(source.samples));
+  memcpy(target.learnedDays, source.learnedDays, sizeof(source.learnedDays));
+  // Version 2 kannte noch keinen Prognosefehler. Vorhandene Werte beginnen
+  // deshalb bewusst mit einer mittleren Unsicherheit statt mit 100 % Vertrauen.
+  for (size_t day = 0; day < LOAD_PROFILE_DAYS; ++day) {
+    for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) {
+      if (target.samples[day][slot] == 0) continue;
+      const uint32_t expected = target.baseWatts[day][slot]
+          + static_cast<uint32_t>(target.eventWatts[day][slot])
+          * target.eventProbability[day][slot] / 100U;
+      target.deviationWatts[day][slot] = static_cast<uint16_t>(
+          min<uint32_t>(65535U, max<uint32_t>(100U, expected / 4U)));
+      target.baseDeviationWatts[day][slot] = static_cast<uint16_t>(
+          min<uint32_t>(65535U, max<uint32_t>(50U, target.baseWatts[day][slot] / 5U)));
+    }
+  }
+  target.crc = loadProfileCrcFor(target);
+}
+
 bool ensureProfileStorage() {
   esp_err_t result = nvs_flash_init_partition(ConfigDefaults::PROFILE_PARTITION_LABEL);
   if (result == ESP_ERR_NVS_NO_FREE_PAGES || result == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -3665,14 +3720,33 @@ bool ensureProfileStorage() {
   return result == ESP_OK;
 }
 
-bool readStoredProfileFrom(const char *partitionLabel, LoadProfileData &target) {
+bool readStoredProfileFrom(const char *partitionLabel, LoadProfileData &target,
+                           bool *formatMigrated = nullptr) {
+  if (formatMigrated != nullptr) *formatMigrated = false;
   if (!preferences.begin("sgprofile", true, partitionLabel)) return false;
   const size_t storedSize = preferences.getBytesLength("profile");
-  const size_t bytesRead = storedSize == sizeof(target)
-      ? preferences.getBytes("profile", &target, sizeof(target))
-      : 0;
+  size_t bytesRead = 0;
+  if (storedSize == sizeof(target)) {
+    bytesRead = preferences.getBytes("profile", &target, sizeof(target));
+    preferences.end();
+    return bytesRead == sizeof(target) && validLoadProfileBlob(target);
+  }
+  if (storedSize == sizeof(LegacyLoadProfileDataV2)) {
+    LegacyLoadProfileDataV2 *legacy = static_cast<LegacyLoadProfileDataV2 *>(
+        malloc(sizeof(LegacyLoadProfileDataV2)));
+    if (legacy != nullptr) {
+      bytesRead = preferences.getBytes("profile", legacy, sizeof(*legacy));
+      if (bytesRead == sizeof(*legacy) && validLegacyLoadProfileBlob(*legacy)) {
+        migrateLegacyLoadProfile(*legacy, target);
+        if (formatMigrated != nullptr) *formatMigrated = true;
+      } else {
+        bytesRead = 0;
+      }
+      free(legacy);
+    }
+  }
   preferences.end();
-  return bytesRead == sizeof(target) && validLoadProfileBlob(target);
+  return bytesRead == sizeof(LegacyLoadProfileDataV2) && validLoadProfileBlob(target);
 }
 
 bool saveStoredProfile();
@@ -4001,14 +4075,16 @@ void loadStoredProfile() {
   resetLoadProfile();
   profileDirty = false;
   const bool dedicatedReady = ensureProfileStorage();
+  bool formatMigrated = false;
   bool loaded = dedicatedReady
-      && readStoredProfileFrom(ConfigDefaults::PROFILE_PARTITION_LABEL, loadProfile);
-  bool migrated = false;
+      && readStoredProfileFrom(ConfigDefaults::PROFILE_PARTITION_LABEL, loadProfile, &formatMigrated);
+  bool partitionMigrated = false;
   if (!loaded) {
     resetLoadProfile();
     profileDirty = false;
-    loaded = readStoredProfileFrom(nullptr, loadProfile);
-    migrated = loaded;
+    formatMigrated = false;
+    loaded = readStoredProfileFrom(nullptr, loadProfile, &formatMigrated);
+    partitionMigrated = loaded;
   }
   if (!loaded) {
     resetLoadProfile();
@@ -4017,15 +4093,19 @@ void loadStoredProfile() {
     return;
   }
 
-  if (migrated) {
-    debugPrintln("Altes Lastprofil gefunden; Übernahme in die neue Profil-NVS läuft.");
+  if (partitionMigrated || formatMigrated) {
+    debugPrintln(partitionMigrated
+        ? "Altes Lastprofil gefunden; Übernahme in die neue Profil-NVS läuft."
+        : "Lastprofil aus Version 1.6 erkannt; Erweiterung auf das neue Lernformat läuft.");
     if (saveStoredProfile()) {
-      if (preferences.begin("sgprofile", false)) {
+      if (partitionMigrated && preferences.begin("sgprofile", false)) {
         preferences.remove("profile");
         preferences.end();
         debugPrintln("Lastprofil in die neue Profil-NVS übernommen und alten Datenblock entfernt.");
-      } else {
+      } else if (partitionMigrated) {
         debugPrintln("Lastprofil wurde übernommen; der alte Datenblock konnte noch nicht entfernt werden.");
+      } else if (formatMigrated) {
+        debugPrintln("Bisheriger Lernstand wurde in das neue Profilformat übernommen und verifiziert.");
       }
     } else {
       profileDirty = true;
@@ -4373,24 +4453,86 @@ bool validBackupHistoryName(const char (&name)[13]) {
   return true;
 }
 
+uint8_t effectiveEventProbability(uint8_t probability) {
+  // Ein einzelner Ausreisser erreicht bei der Standard-Lernrate 20 %. Durch
+  // die quadratische Gewichtung geht er nur zu 4 % in die naechste Prognose
+  // ein. Wiederkehrende Ereignisse naehern sich stetig dem vollen Gewicht.
+  return static_cast<uint8_t>((static_cast<uint16_t>(probability) * probability + 50U) / 100U);
+}
+
+uint16_t profileExpectedWatts(uint8_t day, uint8_t slot) {
+  const uint8_t effectiveProbability = effectiveEventProbability(
+      loadProfile.eventProbability[day][slot]);
+  const uint32_t eventPart = static_cast<uint32_t>(loadProfile.eventWatts[day][slot])
+                           * effectiveProbability / 100U;
+  return static_cast<uint16_t>(min<uint32_t>(65535U,
+      static_cast<uint32_t>(loadProfile.baseWatts[day][slot]) + eventPart));
+}
+
+uint8_t profileConfidencePercent(uint8_t day, uint8_t slot) {
+  const uint8_t samples = loadProfile.samples[day][slot];
+  if (samples == 0) return 0;
+  const uint16_t expected = max<uint16_t>(400U, profileExpectedWatts(day, slot));
+  const uint16_t deviation = loadProfile.deviationWatts[day][slot];
+  const uint8_t stability = static_cast<uint8_t>(100U - min<uint32_t>(100U,
+      static_cast<uint32_t>(deviation) * 100U / expected));
+  const int16_t probabilityDistance = abs(static_cast<int16_t>(
+      loadProfile.eventProbability[day][slot]) - 50);
+  const uint8_t eventCertainty = static_cast<uint8_t>(min<int16_t>(100, probabilityDistance * 2));
+  const uint8_t observationStrength = static_cast<uint8_t>(min<uint16_t>(100U,
+      static_cast<uint16_t>(samples) * 15U));
+  const uint16_t quality = (static_cast<uint16_t>(stability) * 70U
+                          + static_cast<uint16_t>(eventCertainty) * 30U + 50U) / 100U;
+  return static_cast<uint8_t>((quality * observationStrength + 50U) / 100U);
+}
+
+uint16_t profilePlanningWatts(uint8_t day, uint8_t slot) {
+  const uint16_t expected = profileExpectedWatts(day, slot);
+  if (loadProfile.samples[day][slot] == 0) return expected;
+
+  // Bei einer noch unsicheren oder stark schwankenden Viertelstunde wird ein
+  // kleiner Puffer eingeplant. Mit zunehmender Verlaesslichkeit verschwindet
+  // dieser automatisch; selbst bei grossen Abweichungen bleibt er begrenzt.
+  const uint8_t confidence = profileConfidencePercent(day, slot);
+  const uint32_t reserve = static_cast<uint32_t>(loadProfile.deviationWatts[day][slot])
+                         * (100U - confidence) / 200U;
+  return static_cast<uint16_t>(min<uint32_t>(65535U,
+      static_cast<uint32_t>(expected) + min<uint32_t>(1500U, reserve)));
+}
+
+bool comparableProfileDay(uint8_t requested, uint8_t candidate) {
+  const bool requestedWeekend = requested == 0 || requested == 6;
+  const bool candidateWeekend = candidate == 0 || candidate == 6;
+  return requestedWeekend == candidateWeekend;
+}
+
 uint16_t expectedLoadWatts(time_t epoch) {
   const uint8_t day = profileDayFor(epoch);
   const uint8_t slot = profileSlotFor(epoch);
-  if (loadProfile.samples[day][slot] > 0) {
-    const uint32_t eventPart = static_cast<uint32_t>(loadProfile.eventWatts[day][slot])
-                             * loadProfile.eventProbability[day][slot] / 100U;
-    return static_cast<uint16_t>(min<uint32_t>(65535U, loadProfile.baseWatts[day][slot] + eventPart));
-  }
-  uint32_t sum = 0;
-  uint8_t count = 0;
+  if (loadProfile.samples[day][slot] > 0) return profilePlanningWatts(day, slot);
+
+  // Fehlt fuer diesen Wochentag noch ein Vergleich, werden zuerst nur
+  // vergleichbare Tage genutzt: Werktage untereinander, Wochenende untereinander.
+  uint32_t weightedSum = 0;
+  uint16_t totalWeight = 0;
   for (size_t otherDay = 0; otherDay < LOAD_PROFILE_DAYS; ++otherDay) {
-    if (loadProfile.samples[otherDay][slot] == 0) continue;
-    sum += loadProfile.baseWatts[otherDay][slot]
-         + static_cast<uint32_t>(loadProfile.eventWatts[otherDay][slot])
-         * loadProfile.eventProbability[otherDay][slot] / 100U;
-    ++count;
+    if (!comparableProfileDay(day, otherDay) || loadProfile.samples[otherDay][slot] == 0) continue;
+    const uint8_t weight = max<uint8_t>(10U, profileConfidencePercent(otherDay, slot));
+    weightedSum += static_cast<uint32_t>(profilePlanningWatts(otherDay, slot)) * weight;
+    totalWeight += weight;
   }
-  if (count > 0) return static_cast<uint16_t>(min<uint32_t>(65535U, sum / count));
+  // Erst wenn auch in der passenden Tagesgruppe nichts gelernt wurde, dienen
+  // alle anderen Tage als vorsichtiger Startwert.
+  if (totalWeight == 0) {
+    for (size_t otherDay = 0; otherDay < LOAD_PROFILE_DAYS; ++otherDay) {
+      if (loadProfile.samples[otherDay][slot] == 0) continue;
+      const uint8_t weight = max<uint8_t>(10U, profileConfidencePercent(otherDay, slot));
+      weightedSum += static_cast<uint32_t>(profilePlanningWatts(otherDay, slot)) * weight;
+      totalWeight += weight;
+    }
+  }
+  if (totalWeight > 0) return static_cast<uint16_t>(
+      min<uint32_t>(65535U, weightedSum / totalWeight));
   const int32_t liveLoad = measuredLoadPower();
   if (liveLoad >= 0) {
     const uint32_t controlled = controlledStagePowerWatts();
@@ -4413,15 +4555,44 @@ void commitLearningBlock() {
   uint16_t &event = loadProfile.eventWatts[activeLearningDay][activeLearningSlot];
   uint8_t &probability = loadProfile.eventProbability[activeLearningDay][activeLearningSlot];
   uint8_t &samples = loadProfile.samples[activeLearningDay][activeLearningSlot];
-  const bool highEvent = base != 0 && sample > static_cast<uint32_t>(base) + config.eventLoadThresholdWatts;
+  uint16_t &deviation = loadProfile.deviationWatts[activeLearningDay][activeLearningSlot];
+  uint16_t &baseDeviation = loadProfile.baseDeviationWatts[activeLearningDay][activeLearningSlot];
+  const uint16_t previousExpected = profileExpectedWatts(activeLearningDay, activeLearningSlot);
+  const uint16_t previousError = samples == 0 ? 0 : static_cast<uint16_t>(min<uint32_t>(65535U,
+      abs(static_cast<int32_t>(sample) - static_cast<int32_t>(previousExpected))));
+  const uint32_t dynamicEventThreshold = max<uint32_t>(config.eventLoadThresholdWatts,
+      max<uint32_t>(500U, static_cast<uint32_t>(baseDeviation) * 3U));
+  const bool highEvent = base != 0
+      && sample > static_cast<uint32_t>(base) + dynamicEventThreshold;
   if (highEvent) {
     event = blendUnsigned(event, static_cast<uint16_t>(sample - base), config.learningPercent);
   } else {
-    base = blendUnsigned(base, sample, config.learningPercent);
+    uint16_t robustSample = sample;
+    const uint16_t baseError = base == 0 ? 0 : static_cast<uint16_t>(min<uint32_t>(65535U,
+        abs(static_cast<int32_t>(sample) - static_cast<int32_t>(base))));
+    if (base != 0 && samples >= 2) {
+      const uint32_t allowedChange = max<uint32_t>(500U,
+          max<uint32_t>(config.eventLoadThresholdWatts / 2U,
+                        static_cast<uint32_t>(baseDeviation) * 3U));
+      const uint32_t lower = base > allowedChange ? base - allowedChange : 0U;
+      const uint32_t upper = min<uint32_t>(65535U, static_cast<uint32_t>(base) + allowedChange);
+      robustSample = static_cast<uint16_t>(constrain(static_cast<uint32_t>(sample), lower, upper));
+    }
+    base = blendUnsigned(base, robustSample, config.learningPercent);
+    if (samples > 0) {
+      const uint16_t boundedBaseError = static_cast<uint16_t>(min<uint32_t>(baseError,
+          max<uint32_t>(config.eventLoadThresholdWatts, static_cast<uint32_t>(baseDeviation) * 3U)));
+      baseDeviation = blendUnsigned(baseDeviation, boundedBaseError,
+                                    constrain(config.learningPercent, 10, 50));
+    }
   }
   const uint16_t observation = highEvent ? 100U : 0U;
   probability = static_cast<uint8_t>((static_cast<uint16_t>(probability) * (100U - config.learningPercent)
                                     + observation * config.learningPercent + 50U) / 100U);
+  if (samples > 0) {
+    const uint8_t errorLearningPercent = constrain(config.learningPercent, 10, 50);
+    deviation = blendUnsigned(deviation, previousError, errorLearningPercent);
+  }
   if (samples < 255) ++samples;
   todayLoadWatts[activeLearningSlot] = sample;
   if (todaySamples[activeLearningSlot] < 65535) ++todaySamples[activeLearningSlot];
@@ -5853,32 +6024,57 @@ void addNoCacheHeaders() {
   server.sendHeader("Pragma", "no-cache");
 }
 
-void injectMqttNavigation(String &page) {
-  const bool hasMqtt = page.indexOf("href=\"/mqtt\"") >= 0 || page.indexOf("href='/mqtt'") >= 0;
-  const bool hasSystem = page.indexOf("href=\"/system\"") >= 0 || page.indexOf("href='/system'") >= 0;
-  if (!hasMqtt) {
-    page.replace("<a href=\"/settings\">Einstellungen</a>",
-                 "<a href=\"/mqtt\">Daten</a><a href=\"/settings\">Einstellungen</a>");
-    page.replace("<a class=\"active\" aria-current=\"page\" href=\"/settings\">Einstellungen</a>",
-                 "<a href=\"/mqtt\">Daten</a><a class=\"active\" aria-current=\"page\" href=\"/settings\">Einstellungen</a>");
+void injectMainNavigation(String &page) {
+  const int navStart = page.indexOf("<nav class=\"nav\"");
+  if (navStart < 0) return;
+  const int navEnd = page.indexOf("</nav>", navStart);
+  if (navEnd < 0) return;
+
+  static const char *const paths[] = {
+    "/inverter", "/battery", "/forecast", "/tariff", "/load-profile",
+    "/history", "/mqtt", "/settings", "/system", "/firmware", "/about"
+  };
+  static const char *const labels[] = {
+    "Wechselrichter", "Batterie", "Prognose", "Stromtarif", "Lastprofil",
+    "Verlauf", "Daten", "Einstellungen", "System", "Firmware", "About"
+  };
+  static_assert(sizeof(paths) / sizeof(paths[0]) == sizeof(labels) / sizeof(labels[0]),
+                "Navigation benötigt gleich viele Pfade und Beschriftungen.");
+
+  String current = server.uri();
+  const int queryStart = current.indexOf('?');
+  if (queryStart >= 0) current.remove(queryStart);
+  if (current == "/") current = "/inverter";
+
+  String navigation;
+  navigation.reserve(1050);
+  navigation = F("<nav class=\"nav\" aria-label=\"Hauptnavigation\">");
+  for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+    navigation += F("<a");
+    if (i == 0) navigation += F(" id=\"navInverter\"");
+    else if (i == 1) navigation += F(" id=\"navBattery\"");
+    if (current == paths[i]) navigation += F(" class=\"active\" aria-current=\"page\"");
+    navigation += F(" href=\"");
+    navigation += paths[i];
+    navigation += F("\">");
+    navigation += labels[i];
+    navigation += F("</a>");
   }
-  if (!hasSystem) {
-    page.replace("<a href=\"/firmware\">Firmware</a>",
-                 "<a href=\"/system\">System</a><a href=\"/firmware\">Firmware</a>");
-    page.replace("<a class=\"active\" aria-current=\"page\" href=\"/firmware\">Firmware</a>",
-                 "<a href=\"/system\">System</a><a class=\"active\" aria-current=\"page\" href=\"/firmware\">Firmware</a>");
-  }
+  navigation += F("</nav>");
+
+  const String previousNavigation = page.substring(navStart, navEnd + 6);
+  page.replace(previousNavigation, navigation);
 }
 
-void sendHtmlPageWithMqttNavigation(const char *pageInProgramMemory) {
+void sendHtmlPageWithCompleteNavigation(const char *pageInProgramMemory) {
   String page(reinterpret_cast<const __FlashStringHelper *>(pageInProgramMemory));
-  injectMqttNavigation(page);
+  injectMainNavigation(page);
   addNoCacheHeaders();
   server.send(200, "text/html; charset=utf-8", page);
 }
 
 void handleIndex() {
-  sendHtmlPageWithMqttNavigation(INDEX_HTML);
+  sendHtmlPageWithCompleteNavigation(INDEX_HTML);
 }
 
 String gpioSelectOptions(uint8_t selectedGpio) {
@@ -5928,7 +6124,7 @@ void handleSettings() {
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
   server.send(200, "text/html; charset=utf-8", "");
   String settingsHead(FPSTR(SETTINGS_HEAD));
-  injectMqttNavigation(settingsHead);
+  injectMainNavigation(settingsHead);
   sendChunk(settingsHead);
 
   String part;
@@ -6662,8 +6858,8 @@ const load=async()=>{try{const r=await fetch('/api/forecast',{cache:'no-store'})
 )HTML";
 
 const char LOAD_PROFILE_HTML[] PROGMEM = R"HTML(
-<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lastprofil · Solar Prognose Monitor</title><style>:root{--bg:#f3f5f7;--card:#fff;--text:#17212b;--muted:#64717d;--accent:#087f5b;--line:#dfe4e8;--bad:#b42318}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{background:#fff;border-bottom:1px solid var(--line)}.bar{max-width:1120px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}.nav{display:flex;gap:6px;overflow-x:auto}.nav a{white-space:nowrap;color:var(--text);text-decoration:none;padding:8px 10px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}main{max-width:1120px;margin:22px auto;padding:0 18px}.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}select,.button{padding:10px 13px;border:1px solid var(--line);border-radius:9px;background:#fff;font:inherit}.button{border:0;background:var(--accent);color:#fff;font-weight:650;cursor:pointer}.button.bad{background:var(--bad)}canvas{display:block;width:100%;height:330px}.muted{color:var(--muted)}table{width:100%;border-collapse:collapse}th,td{padding:8px;text-align:right;border-bottom:1px solid var(--line)}th:first-child,td:first-child{text-align:left}.scroll{overflow:auto}@media(max-width:800px){.bar{align-items:flex-start;flex-wrap:wrap}.nav{width:100%}}.skip-link{position:fixed;left:12px;top:8px;z-index:20;transform:translateY(-150%);background:#fff;color:#17212b;padding:10px 14px;border:2px solid var(--accent);border-radius:8px}.skip-link:focus{transform:none}:focus-visible{outline:3px solid #005fcc;outline-offset:3px}.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}</style></head><body><a class="skip-link" href="#main">Zum Hauptinhalt springen</a><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav" aria-label="Hauptnavigation"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a class="active" aria-current="page" href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header><main id="main" tabindex="-1"><section class="card"><div class="row"><label for="day">Wochentag</label><select id="day"><option value="1">Montag</option><option value="2">Dienstag</option><option value="3">Mittwoch</option><option value="4">Donnerstag</option><option value="5">Freitag</option><option value="6">Samstag</option><option value="0">Sonntag</option></select><button id="reset" class="button bad">Lernprofil löschen</button><span id="status" class="muted" role="status" aria-live="polite" aria-atomic="true"></span></div><p class="muted">Die Grundlast und wiederkehrende Großlasten werden getrennt gelernt. Bekannte eingeschaltete Überschuss-Stufen werden vor dem Lernen abgezogen.</p></section><section class="card"><canvas id="chart" role="img" aria-label="Lastprofil des ausgewählten Wochentags. Grundlast, wiederkehrende Großlasten, Erwartung und heutige Werte stehen zusätzlich in der folgenden Tabelle."></canvas></section><section class="card"><div class="scroll"><table><caption class="sr-only">Gelerntes Lastprofil in 15-Minuten-Schritten</caption><thead><tr><th scope="col">Zeit</th><th scope="col">Grundlast</th><th scope="col">Großlast-Anteil</th><th scope="col">Erwartet</th><th scope="col">Heute</th><th scope="col">Wahrscheinlichkeit</th></tr></thead><tbody id="rows"></tbody></table></div></section></main><script>
-let data=null;const fmt=n=>Math.round(Number(n)||0);const draw=()=>{if(!data)return;const cv=document.querySelector('#chart'),dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;cv.width=w*dpr;cv.height=h*dpr;const c=cv.getContext('2d');c.scale(dpr,dpr);const series=[data.expected,data.today,data.base],colors=['#087f5b','#d97706','#2673c9'],names=['Erwartet','Heute','Grundlast'],max=Math.max(500,...series.flat()),left=44,right=10,top=28,bottom=45,plotW=w-left-right,plotH=h-top-bottom;c.clearRect(0,0,w,h);c.font='11px system-ui';c.textAlign='left';for(let j=0;j<=4;j++){const y=top+plotH*j/4;c.strokeStyle='#dfe4e8';c.beginPath();c.moveTo(left,y);c.lineTo(w-right,y);c.stroke();c.fillStyle='#64717d';c.fillText(Math.round(max*(1-j/4))+' W',2,y+4)}const ticks=w<520?[0,24,48,72,95]:[0,16,32,48,64,80,95];ticks.forEach(i=>{const x=left+plotW*i/95;c.strokeStyle='#edf0f2';c.beginPath();c.moveTo(x,top);c.lineTo(x,top+plotH);c.stroke();c.fillStyle='#64717d';c.textAlign=i===0?'left':i===95?'right':'center';c.fillText(data.labels[i],x,top+plotH+18)});c.textAlign='left';series.forEach((s,j)=>{c.strokeStyle=colors[j];c.lineWidth=2;c.beginPath();s.forEach((v,i)=>{const x=left+plotW*i/95,y=top+plotH-v/max*plotH;i?c.lineTo(x,y):c.moveTo(x,y)});c.stroke();c.fillStyle=colors[j];c.fillRect(left+j*120,8,12,3);c.fillText(names[j],left+18+j*120,13)})};const load=async()=>{const day=document.querySelector('#day').value,r=await fetch('/api/load-profile?day='+day,{cache:'no-store'});data=await r.json();document.querySelector('#status').textContent='Gelernte Tage: '+data.learnedDays+' · aktuelle 15-Minuten-Position: '+data.currentSlot;document.querySelector('#rows').innerHTML=data.labels.map((t,i)=>`<tr><td>${t}</td><td>${fmt(data.base[i])} W</td><td>${fmt(data.event[i])} W</td><td>${fmt(data.expected[i])} W</td><td>${fmt(data.today[i])} W</td><td>${data.probability[i]} %</td></tr>`).join('');draw()};document.querySelector('#day').addEventListener('change',load);document.querySelector('#reset').addEventListener('click',async()=>{if(!confirm('Das vollständig gelernte Lastprofil wirklich löschen?'))return;await fetch('/api/load-profile/reset',{method:'POST'});load()});load();setInterval(load,15000);addEventListener('resize',draw);
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lastprofil · Solar Prognose Monitor</title><style>:root{--bg:#f3f5f7;--card:#fff;--text:#17212b;--muted:#64717d;--accent:#087f5b;--line:#dfe4e8;--bad:#b42318}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{background:#fff;border-bottom:1px solid var(--line)}.bar{max-width:1120px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}.nav{display:flex;gap:6px;overflow-x:auto}.nav a{white-space:nowrap;color:var(--text);text-decoration:none;padding:8px 10px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}main{max-width:1120px;margin:22px auto;padding:0 18px}.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}select,.button{padding:10px 13px;border:1px solid var(--line);border-radius:9px;background:#fff;font:inherit}.button{border:0;background:var(--accent);color:#fff;font-weight:650;cursor:pointer}.button.bad{background:var(--bad)}canvas{display:block;width:100%;height:330px}.muted{color:var(--muted)}table{width:100%;border-collapse:collapse}th,td{padding:8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}th:first-child,td:first-child{text-align:left}.scroll{overflow:auto}@media(max-width:800px){.bar{align-items:flex-start;flex-wrap:wrap}.nav{width:100%}}.skip-link{position:fixed;left:12px;top:8px;z-index:20;transform:translateY(-150%);background:#fff;color:#17212b;padding:10px 14px;border:2px solid var(--accent);border-radius:8px}.skip-link:focus{transform:none}:focus-visible{outline:3px solid #005fcc;outline-offset:3px}.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}</style></head><body><a class="skip-link" href="#main">Zum Hauptinhalt springen</a><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav" aria-label="Hauptnavigation"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a class="active" aria-current="page" href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header><main id="main" tabindex="-1"><section class="card"><div class="row"><label for="day">Wochentag</label><select id="day"><option value="1">Montag</option><option value="2">Dienstag</option><option value="3">Mittwoch</option><option value="4">Donnerstag</option><option value="5">Freitag</option><option value="6">Samstag</option><option value="0">Sonntag</option></select><button id="reset" class="button bad">Lernprofil löschen</button><span id="status" class="muted" role="status" aria-live="polite" aria-atomic="true"></span></div><p class="muted">Die Grundlast und wiederkehrende Großlasten werden getrennt gelernt. Einzelne Ausreißer werden abgeschwächt, wiederkehrende Verbraucher zunehmend berücksichtigt. Solange ein Zeitfenster noch unsicher ist, enthält der Planwert einen begrenzten Sicherheitspuffer. Bekannte eingeschaltete Überschuss-Stufen werden vor dem Lernen abgezogen.</p></section><section class="card"><canvas id="chart" role="img" aria-label="Lastprofil des ausgewählten Wochentags. Gelernte Erwartung, vorsichtiger Planwert, heutige Werte und Grundlast stehen zusätzlich in der folgenden Tabelle."></canvas></section><section class="card"><div class="scroll"><table><caption class="sr-only">Gelerntes Lastprofil in 15-Minuten-Schritten</caption><thead><tr><th scope="col">Zeit</th><th scope="col">Grundlast</th><th scope="col">Großlast-Anteil</th><th scope="col">Erwartet</th><th scope="col">Planwert</th><th scope="col">Heute</th><th scope="col">Großlast-Wahrscheinlichkeit</th><th scope="col">Beobachtungen</th><th scope="col">Ø Abweichung</th><th scope="col">Verlässlichkeit</th></tr></thead><tbody id="rows"></tbody></table></div></section></main><script>
+let data=null;const fmt=n=>Math.round(Number(n)||0);const draw=()=>{if(!data)return;const cv=document.querySelector('#chart'),dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;cv.width=w*dpr;cv.height=h*dpr;const c=cv.getContext('2d');c.scale(dpr,dpr);const series=[data.planning,data.expected,data.today,data.base],colors=['#6b4f9b','#087f5b','#d97706','#2673c9'],names=['Planwert','Erwartet','Heute','Grundlast'],max=Math.max(500,...series.flat()),left=44,right=10,top=28,bottom=45,plotW=w-left-right,plotH=h-top-bottom;c.clearRect(0,0,w,h);c.font='11px system-ui';c.textAlign='left';for(let j=0;j<=4;j++){const y=top+plotH*j/4;c.strokeStyle='#dfe4e8';c.beginPath();c.moveTo(left,y);c.lineTo(w-right,y);c.stroke();c.fillStyle='#64717d';c.fillText(Math.round(max*(1-j/4))+' W',2,y+4)}const ticks=w<520?[0,24,48,72,95]:[0,16,32,48,64,80,95];ticks.forEach(i=>{const x=left+plotW*i/95;c.strokeStyle='#edf0f2';c.beginPath();c.moveTo(x,top);c.lineTo(x,top+plotH);c.stroke();c.fillStyle='#64717d';c.textAlign=i===0?'left':i===95?'right':'center';c.fillText(data.labels[i],x,top+plotH+18)});c.textAlign='left';series.forEach((s,j)=>{c.strokeStyle=colors[j];c.lineWidth=2;c.beginPath();s.forEach((v,i)=>{const x=left+plotW*i/95,y=top+plotH-v/max*plotH;i?c.lineTo(x,y):c.moveTo(x,y)});c.stroke();c.fillStyle=colors[j];c.fillRect(left+j*120,8,12,3);c.fillText(names[j],left+18+j*120,13)})};const load=async()=>{const day=document.querySelector('#day').value,r=await fetch('/api/load-profile?day='+day,{cache:'no-store'});data=await r.json();document.querySelector('#status').textContent='Gelernte Tage: '+data.learnedDays+' · mittlere Verlässlichkeit: '+data.averageConfidence+' % · aktuelle 15-Minuten-Position: '+data.currentSlot;document.querySelector('#rows').innerHTML=data.labels.map((t,i)=>`<tr><td>${t}</td><td>${fmt(data.base[i])} W</td><td>${fmt(data.event[i])} W</td><td>${fmt(data.expected[i])} W</td><td>${fmt(data.planning[i])} W</td><td>${fmt(data.today[i])} W</td><td>${data.probability[i]} %</td><td>${data.samples[i]}</td><td>${fmt(data.deviation[i])} W</td><td>${data.confidence[i]} %</td></tr>`).join('');draw()};document.querySelector('#day').addEventListener('change',load);document.querySelector('#reset').addEventListener('click',async()=>{if(!confirm('Das vollständig gelernte Lastprofil wirklich löschen?'))return;await fetch('/api/load-profile/reset',{method:'POST'});load()});load();setInterval(load,15000);addEventListener('resize',draw);
 </script></body></html>
 )HTML";
 
@@ -6705,6 +6901,7 @@ void handleMqttPage() {
       "<tr><th scope='row'>Zugriff</th><td>Nur lesend, keine Steuerbefehle</td></tr></table>"
       "<p class='muted'>In Prometheus als Ziel <code>http://ESP-IP/metrics</code> "
       "eintragen. Grafana greift nicht direkt auf den ESP32 zu.</p></section></main>");
+  injectMainNavigation(page);
   server.send(200, "text/html; charset=utf-8", page);
 }
 
@@ -6764,7 +6961,7 @@ void handlePrometheusMetrics() {
 }
 
 void handleTariffPage() {
-  sendHtmlPageWithMqttNavigation(TARIFF_HTML);
+  sendHtmlPageWithCompleteNavigation(TARIFF_HTML);
 }
 
 void handleTariffApi() {
@@ -6812,15 +7009,15 @@ void handleTariffRefresh() {
 }
 
 void handleForecastPage() {
-  sendHtmlPageWithMqttNavigation(FORECAST_HTML);
+  sendHtmlPageWithCompleteNavigation(FORECAST_HTML);
 }
 
 void handleLoadProfilePage() {
-  sendHtmlPageWithMqttNavigation(LOAD_PROFILE_HTML);
+  sendHtmlPageWithCompleteNavigation(LOAD_PROFILE_HTML);
 }
 
 void handleHistoryPage() {
-  sendHtmlPageWithMqttNavigation(HISTORY_HTML);
+  sendHtmlPageWithCompleteNavigation(HISTORY_HTML);
 }
 
 void handleForecastApi() {
@@ -6889,16 +7086,33 @@ void handleLoadProfileApi() {
   const uint8_t day = static_cast<uint8_t>(boundedNumberArgument("day", profileDayFor(time(nullptr)), 0, 6));
   addNoCacheHeaders(); server.setContentLength(CONTENT_LENGTH_UNKNOWN); server.send(200, "application/json; charset=utf-8", "");
   String out = F("{\"day\":"); out += String(day); out += F(",\"learnedDays\":"); out += String(loadProfile.learnedDays[day]);
+  uint32_t confidenceSum = 0;
+  uint16_t confidenceCount = 0;
+  for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) {
+    if (loadProfile.samples[day][slot] == 0) continue;
+    confidenceSum += profileConfidencePercent(day, slot);
+    ++confidenceCount;
+  }
+  out += F(",\"averageConfidence\":");
+  out += String(confidenceCount == 0 ? 0 : confidenceSum / confidenceCount);
   out += F(",\"currentSlot\":"); out += String(profileSlotFor(time(nullptr))); out += F(",\"labels\":[");
   for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) { if (slot) out += ','; char label[8]; snprintf(label, sizeof(label), "\"%02u:%02u\"", static_cast<unsigned>(slot / 4), static_cast<unsigned>((slot % 4) * 15)); out += label; }
   out += F("],\"base\":["); sendChunk(out);
   for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) { String value = slot ? "," : ""; value += String(loadProfile.baseWatts[day][slot]); sendChunk(value); }
   sendChunk(F("],\"event\":["));
-  for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) { String value = slot ? "," : ""; value += String(static_cast<uint32_t>(loadProfile.eventWatts[day][slot]) * loadProfile.eventProbability[day][slot] / 100U); sendChunk(value); }
+  for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) { String value = slot ? "," : ""; value += String(static_cast<uint32_t>(loadProfile.eventWatts[day][slot]) * effectiveEventProbability(loadProfile.eventProbability[day][slot]) / 100U); sendChunk(value); }
   sendChunk(F("],\"probability\":["));
   for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) { String value = slot ? "," : ""; value += String(loadProfile.eventProbability[day][slot]); sendChunk(value); }
+  sendChunk(F("],\"samples\":["));
+  for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) { String value = slot ? "," : ""; value += String(loadProfile.samples[day][slot]); sendChunk(value); }
+  sendChunk(F("],\"deviation\":["));
+  for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) { String value = slot ? "," : ""; value += String(loadProfile.deviationWatts[day][slot]); sendChunk(value); }
+  sendChunk(F("],\"confidence\":["));
+  for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) { String value = slot ? "," : ""; value += String(profileConfidencePercent(day, slot)); sendChunk(value); }
   sendChunk(F("],\"expected\":["));
-  for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) { String value = slot ? "," : ""; value += String(loadProfile.baseWatts[day][slot] + static_cast<uint32_t>(loadProfile.eventWatts[day][slot]) * loadProfile.eventProbability[day][slot] / 100U); sendChunk(value); }
+  for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) { String value = slot ? "," : ""; value += String(profileExpectedWatts(day, slot)); sendChunk(value); }
+  sendChunk(F("],\"planning\":["));
+  for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) { String value = slot ? "," : ""; value += String(profilePlanningWatts(day, slot)); sendChunk(value); }
   sendChunk(F("],\"today\":["));
   const uint8_t today = profileDayFor(time(nullptr));
   for (size_t slot = 0; slot < LOAD_PROFILE_SLOTS; ++slot) { String value = slot ? "," : ""; value += String(day == today ? todayLoadWatts[slot] : 0); sendChunk(value); }
@@ -7089,7 +7303,7 @@ bool hasConfiguredPvArray() {
 
 void handleSystemPage() {
   String page = FPSTR(SYSTEM_HTML);
-  injectMqttNavigation(page);
+  injectMainNavigation(page);
   addNoCacheHeaders();
   server.send(200, "text/html; charset=utf-8", page);
 }
@@ -7347,6 +7561,36 @@ uint32_t crc32RestorePartition(size_t offset, size_t length) {
   return ~crc;
 }
 
+bool readStagedLoadProfile(size_t offset, size_t storedSize,
+                           LoadProfileData &target, String &error) {
+  if (storedSize == sizeof(LoadProfileData)) {
+    if (!readRestorePartition(offset, &target, sizeof(target)) || !validLoadProfileBlob(target)) {
+      error = "Lernprofil ist beschädigt";
+      return false;
+    }
+    return true;
+  }
+  if (storedSize == sizeof(LegacyLoadProfileDataV2)) {
+    LegacyLoadProfileDataV2 *legacy = static_cast<LegacyLoadProfileDataV2 *>(
+        malloc(sizeof(LegacyLoadProfileDataV2)));
+    if (legacy == nullptr) {
+      error = "nicht genügend Arbeitsspeicher für das bisherige Lernprofil";
+      return false;
+    }
+    const bool valid = readRestorePartition(offset, legacy, sizeof(*legacy))
+        && validLegacyLoadProfileBlob(*legacy);
+    if (valid) migrateLegacyLoadProfile(*legacy, target);
+    free(legacy);
+    if (!valid) {
+      error = "Lernprofil aus Version 1.6 ist beschädigt";
+      return false;
+    }
+    return true;
+  }
+  error = "nicht unterstützte Lernprofilversion";
+  return false;
+}
+
 bool validateStagedBackup(BackupArchiveHeaderV1 &header, String &error) {
   if (!readRestorePartition(0, &header, sizeof(header))) {
     error = "Dateikopf konnte nicht gelesen werden";
@@ -7357,8 +7601,10 @@ bool validateStagedBackup(BackupArchiveHeaderV1 &header, String &error) {
     error = "unbekanntes oder beschädigtes Sicherungsformat";
     return false;
   }
+  const bool supportedProfileSize = header.profileSize == sizeof(LoadProfileData)
+      || header.profileSize == sizeof(LegacyLoadProfileDataV2);
   if (header.totalSize != backupRestoreBytes || header.configSize != sizeof(BackupConfigV1)
-      || header.profileSize != sizeof(LoadProfileData) || header.historyCount > BACKUP_MAX_HISTORY_FILES) {
+      || !supportedProfileSize || header.historyCount > BACKUP_MAX_HISTORY_FILES) {
     error = "unplausible Größenangaben in der Sicherung";
     return false;
   }
@@ -7374,10 +7620,9 @@ bool validateStagedBackup(BackupArchiveHeaderV1 &header, String &error) {
       && crc32RestorePartition(offset, sizeof(*snapshot)) == header.configCrc
       && validBackupConfig(*snapshot);
   offset += sizeof(*snapshot);
-  valid = valid && readRestorePartition(offset, profile, sizeof(*profile))
-      && crc32RestorePartition(offset, sizeof(*profile)) == header.profileCrc
-      && validLoadProfileBlob(*profile);
-  offset += sizeof(*profile);
+  valid = valid && crc32RestorePartition(offset, header.profileSize) == header.profileCrc
+      && readStagedLoadProfile(offset, header.profileSize, *profile, error);
+  offset += header.profileSize;
   free(snapshot); free(profile);
   if (!valid) {
     error = "Konfiguration oder Lernprofil ist beschädigt";
@@ -7479,8 +7724,8 @@ bool applyStagedBackup(const BackupArchiveHeaderV1 &header, String &error) {
   }
   const bool readOk = readRestorePartition(offset, snapshot, sizeof(*snapshot));
   offset += sizeof(*snapshot);
-  const bool profileRead = readRestorePartition(offset, profile, sizeof(*profile));
-  offset += sizeof(*profile);
+  const bool profileRead = readStagedLoadProfile(offset, header.profileSize, *profile, error);
+  offset += header.profileSize;
   if (!readOk || !profileRead) {
     free(snapshot); free(profile);
     error = "Konfiguration oder Lernprofil konnte nicht erneut gelesen werden";
@@ -7615,7 +7860,7 @@ const char ABOUT_HTML[] PROGMEM = R"HTML(
 
 void handleFirmwarePage() {
   String page = FPSTR(FIRMWARE_HTML);
-  injectMqttNavigation(page);
+  injectMainNavigation(page);
   page.replace(
       F("<h2>Firmware über Browser installieren</h2>"),
       F("<h2>Firmware über Browser installieren</h2><p class=\"hint\"><b>Empfehlung:</b> Erstelle vor dem Update unter <a href=\"/system\">System</a> eine portable Komplettsicherung. Sie enthält zusätzlich zu Lernprofil und Verlauf auch alle Einstellungen.</p>"));
@@ -7635,7 +7880,7 @@ void handleVersionCheck() {
 
 void handleAboutPage() {
   String page = FPSTR(ABOUT_HTML);
-  injectMqttNavigation(page);
+  injectMainNavigation(page);
   const esp_partition_t *running = esp_ota_get_running_partition();
   const esp_partition_t *nvs = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, "nvs");
   const esp_partition_t *profileNvs = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS,

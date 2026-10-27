@@ -1,6 +1,6 @@
 # Vollständige Bedienungsanleitung
 
-Stand: Firmware **1.6.0**
+Stand: Firmware **1.7.0**
 
 Diese Anleitung beschreibt jede Seite und jedes sichtbare Bedien- oder Anzeigefeld des Solar Prognose Monitors. Die mathematischen Hintergründe stehen bewusst gesammelt im letzten Kapitel. Die erste Geräteintegration unterstützt Sungrow-Wechselrichter und -Batteriespeicher.
 
@@ -124,16 +124,18 @@ Die Firmware schreibt weder Zwangsladeleistung noch maximale Ladeleistung, Lades
 |---|---|
 | Wochentag | Wählt den angezeigten Wochentag aus. Jeder Tag besitzt 96 eigene Viertelstundenblöcke. |
 | Gelernte Tage | Anzahl der bisherigen Lerndurchläufe für den ausgewählten Wochentag. |
+| mittlere Verlässlichkeit | Mittelwert der Verlässlichkeit aller bereits beobachteten Viertelstunden des ausgewählten Wochentags. Viele Beobachtungen und geringe Abweichungen erhöhen den Wert. |
 | aktuelle 15-Minuten-Position | Nummer des gerade laufenden Viertelstundenblocks. |
-| Lernprofil löschen | Löscht nach Sicherheitsabfrage Grundlast, Großlasten, Wahrscheinlichkeiten und heutige Vergleichswerte. |
+| Lernprofil löschen | Löscht nach Sicherheitsabfrage Grundlast, Großlasten, Wahrscheinlichkeiten, Abweichungen, Verlässlichkeitsgrundlage und heutige Vergleichswerte. |
 | Diagramm Grundlast | Langfristig gelernter normaler Verbrauch. |
-| Diagramm Großlast | Erwarteter Anteil einer wiederkehrenden Großlast, also gelernte Ereignisleistung mal Wahrscheinlichkeit. |
-| Diagramm Erwartung | Summe aus gelernter Grundlast und erwartetem Großlastanteil. Diese Kurve fließt in die PV-Prognose ein. |
+| Tabelle Großlast-Anteil | Wirksam gewichteter Anteil einer wiederkehrenden Großlast. Einzelne Ereignisse werden stark gedämpft; Wiederholungen erhöhen den Anteil. |
+| Diagramm Erwartung | Summe aus gelernter Grundlast und dem bereits wirksam gewichteten Großlastanteil. |
+| Diagramm Planwert | Erwartung zuzüglich eines begrenzten Unsicherheitspuffers. Dieser Wert fließt in die PV-Prognose ein. |
 | Diagramm Heute | Heute tatsächlich beobachteter, bereinigter Verbrauch. |
 
-Die Tabelle darunter enthält für jeden 15-Minuten-Block die Spalten **Zeit**, **Grundlast**, **Großlast-Anteil**, **Erwartung**, **Heute** und **Wahrscheinlichkeit**. Eigene eingeschaltete Überschuss-Stufen werden vor dem Lernen abgezogen. Dadurch lernt die Software nicht versehentlich die von ihr selbst zugeschaltete Heizpatrone als normalen Hausverbrauch. Das Profil lernt in Prognose und Bypass weiter. In der Ladeprognose werden alle vier Viertelstunden einer Open-Meteo-Stunde einzeln verrechnet; eine um `:15`, `:30` oder `:45` erwartete Last wird nicht mehr durch den Wert am Stundenanfang ersetzt.
+Die Tabelle darunter enthält für jeden 15-Minuten-Block die Spalten **Zeit**, **Grundlast**, **Großlast-Anteil**, **Erwartung**, **Planwert**, **Heute**, **Großlast-Wahrscheinlichkeit**, **Beobachtungen**, **Ø Abweichung** und **Verlässlichkeit**. Eigene eingeschaltete Überschuss-Stufen werden vor dem Lernen abgezogen. Dadurch lernt die Software nicht versehentlich die von ihr selbst zugeschaltete Heizpatrone als normalen Hausverbrauch. Das Profil lernt in Prognose und Bypass weiter. In der Ladeprognose werden alle vier Viertelstunden einer Open-Meteo-Stunde einzeln verrechnet; eine um `:15`, `:30` oder `:45` erwartete Last wird nicht mehr durch den Wert am Stundenanfang ersetzt.
 
-Das Lernprofil wird mindestens stündlich und unmittelbar vor einem Browser-Firmwareupdate gespeichert. Ein normales Firmwareupdate erhält es. Es geht nur durch **Lernprofil löschen**, vollständiges Löschen des ESP32-Flashs oder ein zukünftig inkompatibles Speicherformat verloren.
+Das Lernprofil wird mindestens stündlich und unmittelbar vor einem Browser-Firmwareupdate gespeichert. Ein normales Firmwareupdate erhält es. Beim ersten Start von Version 1.7 wird das bisherige Profilformat aus Version 1.6 automatisch erweitert, gespeichert und zurückgelesen. Auch eine portable Sicherung aus Version 1.6 kann wiederhergestellt und in das neue Format übernommen werden. Das Profil geht nur durch **Lernprofil löschen**, vollständiges Löschen des ESP32-Flashs oder ein zukünftig ausdrücklich inkompatibles Speicherformat verloren.
 
 ## 8. Tab „Verlauf“
 
@@ -185,7 +187,7 @@ Der System-Tab bündelt Diagnose, Datensicherung und Wiederherstellung. Die Stat
 | Aktualisieren | Lädt den sichtbaren Diagnosezustand sofort neu. |
 | Modbus neu prüfen | Beendet nur die aktuelle TCP-Verbindung und plant einen vollständigen neuen Lesezyklus ein. Es wird kein Holding-Register geschrieben. |
 | Sicherung herunterladen | Übernimmt zuerst den laufenden Lernblock, speichert und verifiziert Lernprofil und Verlauf und lädt anschließend eine `.spmbak`-Datei herunter. Sie enthält alle Einstellungen, Zugangsdaten, das vollständige Lernprofil und alle vorhandenen Verlaufstage. |
-| Sicherung einspielen | Erwartet eine von Version 1.6.0 oder einem kompatiblen Nachfolger erstellte `.spmbak`-Datei. Nach der ausdrücklichen Bestätigung wird sie zunächst im inaktiven Firmware-Slot zwischengespeichert und vollständig geprüft. Erst danach ersetzt sie Einstellungen, Lernprofil und Verlauf. Nach Erfolg startet der ESP32 neu. |
+| Sicherung einspielen | Erwartet eine von Version 1.6.0 oder einem kompatiblen Nachfolger erstellte `.spmbak`-Datei. Version 1.7 übernimmt dabei ein enthaltenes 1.6-Lernprofil automatisch in das neue Format. Nach der ausdrücklichen Bestätigung wird die Datei zunächst im inaktiven Firmware-Slot zwischengespeichert und vollständig geprüft. Erst danach ersetzt sie Einstellungen, Lernprofil und Verlauf. Nach Erfolg startet der ESP32 neu. |
 | Supportbericht | Lädt eine Textdatei mit Firmware-, Hardware-, Speicher-, Netzwerk-, Modbus- und Funktionsstatus. Passwörter, Tokens, API-Inhalte und JSON-Schaltbefehle werden nicht aufgenommen. |
 
 Das Sicherungsformat ist logisch und nicht an rohe Flash-Adressen gebunden. Daher kann eine Sicherung zwischen den angebotenen 4-MB- und 8-MB-Varianten sowie auf einen Ersatz-ESP32 übertragen werden. Der Zielspeicher muss für die enthaltenen Verlaufstage ausreichen. Die Datei ist nicht verschlüsselt und enthält WLAN-, MQTT-, Pushover- und Tarif-Zugangsdaten im Klartext; sie muss entsprechend vertraulich aufbewahrt werden.
@@ -210,7 +212,7 @@ Vor der Wiederherstellung werden eine aktive dynamische Netzladung sicher beende
 |---|---|
 | Messwerte an einen MQTT-Broker senden | Aktiviert den ausschließlich sendenden MQTT-Client. |
 | Broker-IP oder Hostname | Adresse eines Brokers im vertrauenswürdigen lokalen Netzwerk. |
-| Broker-Port | Normalerweise 1883. TLS ist in Version 1.6.0 noch nicht enthalten. |
+| Broker-Port | Normalerweise 1883. TLS ist in Version 1.7.0 noch nicht enthalten. |
 | Sendeintervall | Abstand von 5 bis 3.600 Sekunden zwischen vollständigen Veröffentlichungen. |
 | Benutzername / Passwort | Optionale Broker-Anmeldung. Ein leeres Passwortfeld behält ein bereits gespeichertes Passwort. |
 | MQTT-Zugangsdaten löschen | Entfernt Benutzername und Passwort. |
@@ -523,7 +525,7 @@ Zum geplanten Ladeende wird der konfigurierte Max-SOC als Sonderfreigabe geschri
 
 ### 14.4 Lernendes 15-Minuten-Lastprofil
 
-Der Tag ist in 96 Viertelstunden unterteilt. Pro Wochentag werden Grundlast, Ereignisleistung und Ereigniswahrscheinlichkeit gespeichert. Eigene aktive Überschusslasten werden vor dem Lernen abgezogen. Diese 15-Minuten-Auflösung wird nicht nur angezeigt und gespeichert, sondern ab Version 1.2.0 vollständig in der Energie- und SOC-Prognose verwendet.
+Der Tag ist in 96 Viertelstunden unterteilt. Pro Wochentag werden Grundlast, deren normale Schwankung, Ereignisleistung, Ereigniswahrscheinlichkeit, Beobachtungszahl und die gleitende absolute Prognoseabweichung gespeichert. Eigene aktive Überschusslasten werden vor dem Lernen abgezogen. Diese 15-Minuten-Auflösung wird nicht nur angezeigt und gespeichert, sondern ab Version 1.2.0 vollständig in der Energie- und SOC-Prognose verwendet. Fehlt für einen Wochentag noch ein eigener Wert, nutzt Version 1.7 zuerst verlässlichkeitsgewichtet vergleichbare Tage: Werktage werden untereinander, Samstag und Sonntag als Wochenendgruppe verglichen. Nur wenn dort noch nichts gelernt wurde, dienen alle übrigen Tage als Startwert.
 
 Vereinfacht wird ein neuer Messwert mit einer exponentiellen Gewichtung eingemischt:
 
@@ -532,12 +534,36 @@ neuer Profilwert
   = alter Profilwert × (1 − Lernrate)
     + neue Beobachtung × Lernrate
 
+wirksame Ereigniswahrscheinlichkeit
+  = Wahrscheinlichkeit² / 100
+
 erwartete Last
   = gelernte Grundlast
-    + gelernte Ereignisleistung × Ereigniswahrscheinlichkeit / 100
+    + gelernte Ereignisleistung × wirksame Wahrscheinlichkeit / 100
+
+Stabilität
+  = 100 − min(100,
+      mittlere absolute Prognoseabweichung × 100
+      / max(400 W, erwartete Last))
+
+Ereignis-Eindeutigkeit
+  = min(100, |gespeicherte Wahrscheinlichkeit − 50| × 2)
+
+Beobachtungsstärke
+  = min(100, Anzahl Beobachtungen × 15)
+
+Verlässlichkeit
+  = (70 % × Stabilität + 30 % × Ereignis-Eindeutigkeit)
+    × Beobachtungsstärke / 100
+
+Planwert
+  = erwartete Last
+    + min(1.500 W, mittlere Abweichung × (100 − Verlässlichkeit) / 200)
 ```
 
-Liegt die Beobachtung deutlich über der Grundlast und über der eingestellten Großlastschwelle, wird der Mehrverbrauch als Ereignis gelernt. Dadurch kann etwa eine regelmäßig nachmittags stattfindende Autoladung nach mehreren passenden Tagen mit ihrer bisherigen Wahrscheinlichkeit berücksichtigt werden. Überschreitet diese erwartete Last später die prognostizierte PV-Leistung, fließt die Differenz als negative Batterieenergie in den Fahrplan ein. Spontane, zuvor nicht gelernte Verbraucher können dagegen nicht vorausgesagt werden.
+Liegt die Beobachtung deutlich über der Grundlast und sowohl über der eingestellten Großlastschwelle als auch über dem Dreifachen der bisher üblichen Grundlastschwankung, wird der Mehrverbrauch als Ereignis gelernt. Ein einzelnes Ereignis erreicht bei der Standard-Lernrate zunächst 20 % gespeicherte Wahrscheinlichkeit, wirkt wegen der quadratischen Gewichtung aber nur mit 4 %. Erst nach wiederholtem Auftreten nähert sich sein Einfluss stetig dem vollen Wert. Normale Beobachtungen dürfen die Grundlast nach den ersten beiden Vergleichswerten nur innerhalb einer dynamischen, von Großlastschwelle und normaler Grundlastschwankung bestimmten Grenze verändern. Prognosefehler und Grundlastschwankung werden getrennt geführt, damit erkannte Großlasten ihre eigene Ausreißergrenze nicht immer weiter anheben. Dadurch verschieben einzelne Spitzen den normalen Verbrauch nicht beliebig.
+
+Die Verlässlichkeit verbindet die Zahl der Beobachtungen, die Stabilität gegenüber dem Erwartungswert und die Eindeutigkeit der Ereigniswahrscheinlichkeit. Sie steigt daher nicht allein mit der Laufzeit, sondern nur bei ausreichend konsistenten Daten. Aus der gleitenden absoluten Abweichung und der noch fehlenden Verlässlichkeit entsteht ein kleiner Planungspuffer von höchstens 1.500 W. Mit stabiler Lernkurve schrumpft dieser automatisch. Überschreitet der Planwert später die prognostizierte PV-Leistung, fließt die Differenz als negative Batterieenergie in den Fahrplan ein. Spontane, zuvor nicht gelernte Verbraucher können nicht vorausgesagt werden; ihre Wirkung wird erst nach wiederholtem Auftreten zu einem belastbaren Muster.
 
 ### 14.5 Kumulative Überschuss-Stufen
 
