@@ -2,6 +2,18 @@
 
 ## Unveröffentlicht
 
+## 1.6.0 – 2026-10-26
+
+- ergänzt den neuen Tab **System** mit Geräte-, Speicher-, WLAN-, Modbus- und Batteriediagnose sowie einer übersichtlichen Einrichtungsprüfung
+- erlaubt eine sofortige neue Modbus-Prüfung, ohne Einstellungen oder Steuerwerte zu verändern
+- erstellt eine portable Komplettsicherung mit sämtlichen Einstellungen, Zugangsdaten, dem verifizierten Lastprofil und bis zu 31 Tagen Anlagenverlauf
+- verwendet ein eigenes versioniertes Sicherungsformat mit Prüfsummen statt einer hardwareabhängigen Rohkopie; Sicherungen lassen sich dadurch zwischen 4-MB- und 8-MB-Geräten übertragen
+- speichert eine hochgeladene Sicherung zunächst vollständig im inaktiven Firmware-Slot und prüft Dateikopf, Größen, Namen und sämtliche Prüfsummen, bevor bestehende Daten verändert werden
+- beendet vor einer Wiederherstellung aktive Netzladung und Ausgänge; alte laufende Schreib- und Wiederherstellungsaufträge werden auf dem Zielgerät ausdrücklich nicht reaktiviert
+- ergänzt einen herunterladbaren Supportbericht ohne Passwörter, Tokens, API-Inhalte und JSON-Schaltbefehle
+- empfiehlt auf der Firmwareseite vor jedem Update zusätzlich die portable Komplettsicherung
+- bleibt mit rund 1,47 MB Programmspeicher und rund 76 KB globalem RAM auf der 4-MB-Partition nutzbar
+
 ## 1.5.1 – 2026-10-26
 
 - benennt die MQTT-Option verständlicher in „Messwerte an einen MQTT-Broker senden“ um

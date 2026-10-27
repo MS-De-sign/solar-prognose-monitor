@@ -16,7 +16,7 @@ Der Hausverbrauch wird für jeden Wochentag in 15-Minuten-Blöcken gelernt. Wied
 
 Die Steuerung gibt den zulässigen Ladezielwert schrittweise frei. Bei einer unerwarteten Wolkenphase wartet sie nicht auf eine verpasste Zwischenstufe, sondern wechselt auf den zur aktuellen Uhrzeit vorgesehenen Wert. Zusätzlich prüft sie, welcher Batteriestand mindestens freigegeben werden muss, damit das Tagesziel mit der noch erwarteten Energie erreichbar bleibt. Nächtliche Absenkungen der Ladeobergrenze werden nur intern nachgeführt und kurz vor der nächsten PV-Produktion zu einem einzigen Schreibzugriff zusammengefasst. Sicherheitsreserve, gewünschtes Ladeende und Schrittweite lassen sich einstellen. Da Wetter- und Verbrauchsprognosen nie vollkommen exakt sind, ersetzt das System keine Anlagenüberwachung und sollte bei der ersten Inbetriebnahme kontrolliert werden.
 
-Aktuelle Version: **1.5.1**
+Aktuelle Version: **1.6.0**
 
 **Hardwarestand:** Die aktuelle Firmware ist für ein klassisches **ESP32 DevKit mit ESP32-WROOM-Modul** ausgelegt. Weitere ESP32-Varianten wie der **ESP32-C3** werden derzeit getestet; Pinbelegung, Partitionierung und Programmcode werden dafür schrittweise angepasst. Bis eine Variante ausdrücklich als unterstützt gekennzeichnet ist, sollte dafür nicht ungeprüft die DevKit-Firmware verwendet werden.
 
@@ -46,6 +46,9 @@ Aktuelle Version: **1.5.1**
 - ausschließlich sendende MQTT-3.1.1-Datenweitergabe an Home Assistant, ioBroker, Node-RED oder Telegraf/InfluxDB; ohne externe Steuer- oder Modbus-Schreibbefehle
 - eigener Tab **Daten**, retained Verfügbarkeits-/Messwerttopics, verständliche Metriknamen, vollständige Registertopics und optionale Home-Assistant-Discovery
 - ausschließlich lesender Prometheus-Endpunkt unter `/metrics`; Grafana kann die Messwerte über eine Prometheus-Datenquelle visualisieren
+- neuer Tab **System** mit verständlichem Geräte-, Speicher-, WLAN-, Modbus- und Batterie-Diagnosestatus sowie manueller Neuprüfung
+- portable Komplettsicherung und Wiederherstellung von Einstellungen, Zugangsdaten, gelerntem Lastprofil und allen 31 Verlaufstagen; zwischen 4-MB- und 8-MB-Geräten übertragbar
+- herunterladbarer Supportbericht ohne Passwörter, Tokens, API-Inhalte oder JSON-Schaltbefehle
 
 ## Batteriespeicher-Steuerung
 
@@ -114,10 +117,10 @@ Der Sketch verwendet ausschließlich Bibliotheken aus dem ESP32-Core.
 Für einen reproduzierbaren Build beider Varianten im Projektordner ausführen:
 
 ```powershell
-.\scripts\build-release.ps1 -Version 1.5.1
+.\scripts\build-release.ps1 -Version 1.6.0
 ```
 
-Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.5.1`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
+Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.6.0`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
 
 ### Erstinstallation der Partitionstabelle
 

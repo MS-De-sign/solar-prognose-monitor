@@ -1,6 +1,6 @@
 # MQTT-Datenweitergabe
 
-Stand: Firmware **1.5.1**
+Stand: Firmware **1.6.0**
 
 Der Solar Prognose Monitor kann seine gelesenen Anlagenwerte an einen
 MQTT-Broker im lokalen Netzwerk senden. Die Schnittstelle ist absichtlich
@@ -79,7 +79,7 @@ Beispiel für `<Basis>/state`:
 
 ```json
 {
-  "version": "1.5.1",
+  "version": "1.6.0",
   "device_id": "A1B2C3",
   "timestamp": 1792681200,
   "uptime_seconds": 3600,

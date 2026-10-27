@@ -1,6 +1,6 @@
 # Vollständige Bedienungsanleitung
 
-Stand: Firmware **1.5.1**
+Stand: Firmware **1.6.0**
 
 Diese Anleitung beschreibt jede Seite und jedes sichtbare Bedien- oder Anzeigefeld des Solar Prognose Monitors. Die mathematischen Hintergründe stehen bewusst gesammelt im letzten Kapitel. Die erste Geräteintegration unterstützt Sungrow-Wechselrichter und -Batteriespeicher.
 
@@ -175,7 +175,24 @@ enthält Gerätezustand, Verfügbarkeit, alle gültigen Register und zusätzlich
 stabile Namen für häufig verwendete Messwerte. Die vollständige Einrichtung
 steht in der [Prometheus-/Grafana-Dokumentation](Prometheus-Grafana.md).
 
-## 10. Tab „Einstellungen“
+## 10. Tab „System“
+
+Der System-Tab bündelt Diagnose, Datensicherung und Wiederherstellung. Die Statusanzeige aktualisiert sich automatisch und zeigt Firmware, Laufzeit, WLAN, Access Point, Modbus, direkte Batteriedaten, freien Arbeitsspeicher sowie Zahl und Belegung der Verlaufsdateien.
+
+| Zeile/Bedienung | Bedeutung |
+|---|---|
+| Einrichtungsprüfung | Prüft lesend, ob WLAN, Modbusziel, Wechselrichterantwort, direkter Batterie-SOC, Uhrzeit, mindestens eine PV-Fläche, Lernprofil und Verlaufsspeicher bereit sind. Eine deaktivierte, nicht benötigte Funktion ist nicht automatisch ein Anlagenfehler. |
+| Aktualisieren | Lädt den sichtbaren Diagnosezustand sofort neu. |
+| Modbus neu prüfen | Beendet nur die aktuelle TCP-Verbindung und plant einen vollständigen neuen Lesezyklus ein. Es wird kein Holding-Register geschrieben. |
+| Sicherung herunterladen | Übernimmt zuerst den laufenden Lernblock, speichert und verifiziert Lernprofil und Verlauf und lädt anschließend eine `.spmbak`-Datei herunter. Sie enthält alle Einstellungen, Zugangsdaten, das vollständige Lernprofil und alle vorhandenen Verlaufstage. |
+| Sicherung einspielen | Erwartet eine von Version 1.6.0 oder einem kompatiblen Nachfolger erstellte `.spmbak`-Datei. Nach der ausdrücklichen Bestätigung wird sie zunächst im inaktiven Firmware-Slot zwischengespeichert und vollständig geprüft. Erst danach ersetzt sie Einstellungen, Lernprofil und Verlauf. Nach Erfolg startet der ESP32 neu. |
+| Supportbericht | Lädt eine Textdatei mit Firmware-, Hardware-, Speicher-, Netzwerk-, Modbus- und Funktionsstatus. Passwörter, Tokens, API-Inhalte und JSON-Schaltbefehle werden nicht aufgenommen. |
+
+Das Sicherungsformat ist logisch und nicht an rohe Flash-Adressen gebunden. Daher kann eine Sicherung zwischen den angebotenen 4-MB- und 8-MB-Varianten sowie auf einen Ersatz-ESP32 übertragen werden. Der Zielspeicher muss für die enthaltenen Verlaufstage ausreichen. Die Datei ist nicht verschlüsselt und enthält WLAN-, MQTT-, Pushover- und Tarif-Zugangsdaten im Klartext; sie muss entsprechend vertraulich aufbewahrt werden.
+
+Vor der Wiederherstellung werden eine aktive dynamische Netzladung sicher beendet, Überschussausgänge abgeschaltet und MQTT/Modbus angehalten. Laufende Tarif-, Prognose- oder Rundsteuer-Wiederherstellungsaufträge aus dem alten Gerät werden nicht übernommen. Eine ungültige Datei verändert keine bestehenden Daten. Scheitert erst das Schreiben nach erfolgreicher Gesamtprüfung, bleibt die hochgeladene Datei bis zum nächsten Firmware- oder Sicherungsupload im inaktiven Firmware-Slot erhalten.
+
+## 11. Tab „Einstellungen“
 
 **Speichern und neu starten** legt die Werte dauerhaft ab. Das WLAN-Passwort, MQTT-Passwort, der Stromtarif-API-Token sowie Pushover-Token und Pushover-User-Key werden nie zurück in das Formular geschrieben; leere Zugangsdatenfelder behalten den jeweiligen gespeicherten Wert, solange nicht ausdrücklich „löschen“ gewählt wird.
 
@@ -193,7 +210,7 @@ steht in der [Prometheus-/Grafana-Dokumentation](Prometheus-Grafana.md).
 |---|---|
 | Messwerte an einen MQTT-Broker senden | Aktiviert den ausschließlich sendenden MQTT-Client. |
 | Broker-IP oder Hostname | Adresse eines Brokers im vertrauenswürdigen lokalen Netzwerk. |
-| Broker-Port | Normalerweise 1883. TLS ist in Version 1.5.1 noch nicht enthalten. |
+| Broker-Port | Normalerweise 1883. TLS ist in Version 1.6.0 noch nicht enthalten. |
 | Sendeintervall | Abstand von 5 bis 3.600 Sekunden zwischen vollständigen Veröffentlichungen. |
 | Benutzername / Passwort | Optionale Broker-Anmeldung. Ein leeres Passwortfeld behält ein bereits gespeichertes Passwort. |
 | MQTT-Zugangsdaten löschen | Entfernt Benutzername und Passwort. |
@@ -353,11 +370,12 @@ Die Verbindung zum offiziellen Endpunkt `https://api.pushover.net/1/messages.jso
 | WLAN-IP | Lokale Adresse im Heimnetz oder „nicht verbunden“. |
 | mDNS | Bequemer lokaler Name `http://solar-prognose-monitor.local`. |
 
-## 11. Tab „Firmware“
+## 12. Tab „Firmware“
 
 | Zeile/Bedienung | Bedeutung |
 |---|---|
 | Dateiauswahl | Erwartet die fertig kompilierte `.ino.bin`, passend zum ESP32 und zu dessen vorhandener 4-/8-MB-Partitionstabelle. |
+| Empfehlung zur Komplettsicherung | Verweist vor dem Firmwareupdate auf den System-Tab. Die portable Sicherung enthält zusätzlich zu Lernprofil und Verlauf auch alle Einstellungen und Zugangsdaten. |
 | Notfallfreigabe | Standardmäßig aus. Erlaubt diese eine Aktualisierung auch dann, wenn Lernprofil oder Verlauf nach dem Speichern nicht vollständig aus dem Flash zurückgelesen und bestätigt werden können. Dabei können diese Daten verloren gehen. |
 | Firmware hochladen | Fragt noch einmal nach, beendet eine aktive Tarif-Netzladung sicher, übernimmt den laufenden Lernblock, speichert Lernprofil und Verlauf und prüft beide Sicherungen durch Rücklesen. Nur bei erfolgreicher Prüfung – oder bewusst aktivierter Notfallfreigabe – werden die Überschuss-Ausgänge ausgeschaltet und die Firmware installiert. Kann die Netzladung nicht sicher gestoppt und der EMS-Modus nicht wiederhergestellt werden, wird das Update unabhängig von der Notfallfreigabe abgebrochen. |
 | Fortschrittsbalken | Zeigt den übertragenen Anteil. |
@@ -366,7 +384,7 @@ Die Verbindung zum offiziellen Endpunkt `https://api.pushover.net/1/messages.jso
 
 ArduinoOTA ist nicht enthalten. Das Browserupdate bleibt nach der einmaligen USB-Erstinstallation der vorgesehene Netzwerk-Updateweg. Version 1.0.0 darf nicht zur Erstinstallation auf einem frischen ESP32 verwendet werden: Ihre Partitionstabelle erwartete die App bei `0x20000`, der ESP32 Arduino Core 3.3.8 schrieb sie jedoch bei `0x10000`. Ab Version 1.0.1 stimmen Upload- und Partitionsadresse überein. Ein bereits laufendes Gerät wird mit der passenden normalen `Update.bin` über den Browser aktualisiert. Ein Update ersetzt das Programm, nicht die normal gespeicherten Einstellungen, Lastprofildaten und Verlaufsdateien. Vor jedem Update werden Lernprofil und Verlauf geprüft. Schlägt das fehl, bricht das Update im Normalfall ab. Die Notfallfreigabe verhindert einen Wartungs-Lockout, kann aber den Verlust der nicht bestätigten Daten nicht verhindern. 4- und 8-MB-Firmware sowie unterschiedliche Partitionsschemata dürfen nicht vertauscht werden.
 
-## 12. Tab „About“
+## 13. Tab „About“
 
 | Zeile/Bedienung | Bedeutung |
 |---|---|
@@ -390,9 +408,9 @@ ArduinoOTA ist nicht enthalten. Das Browserupdate bleibt nach der einmaligen USB
 
 Web-Debug kostet nur bei Aktivierung zusätzlichen RAM für den Textpuffer. Die Einstellung dient der Diagnose und ist für den Normalbetrieb nicht erforderlich.
 
-## 13. Berechnungen und interne Abläufe
+## 14. Berechnungen und interne Abläufe
 
-### 12.1 Skalierung wichtiger Modbuswerte
+### 14.1 Skalierung wichtiger Modbuswerte
 
 ```text
 Absoluter Batteriestand in % = Rohwert Adresse 10743 × 0,1
@@ -402,7 +420,7 @@ zu schreibender Rohwert    = gewünschter Max-SOC in % × 10
 
 Der Max-SOC wird auf Unit-ID 1 per Holding-Register geschrieben und sofort mit einem Holding-Read kontrolliert. Die Software schreibt nur 50 bis 100 %. Sie begrenzt die Freigabe zusätzlich auf mindestens den aktuellen direkten SOC sowie auf den zurückgelesenen Min-SOC.
 
-### 12.2 Open-Meteo und PV-Energie
+### 14.2 Open-Meteo und PV-Energie
 
 Für jede Open-Meteo-Stunde und jede aktivierte Dachfläche wird zunächst die PV-Leistung bestimmt. Anschließend wird die Stunde in vier Viertelstunden zerlegt:
 
@@ -436,7 +454,7 @@ Netto-Batterieenergie
 
 Für `:00`, `:15`, `:30` und `:45` wird jeweils der dazugehörige Lastprofilwert eingesetzt. Die Energie der vollständigen Wetterstunde ist die Summe dieser vier Ergebnisse. Übersteigt die gelernte Last die PV-Leistung, wird die resultierende Versorgungslücke als erwartete Batterieentladung geführt. Der rückwärts berechnete Mindest-SOC kann dadurch bereits vor einem regelmäßig auftretenden Großverbraucher steigen. Dabei wird konservativ angenommen, dass die Batterie die Lücke versorgt; ob real Batterie oder Netz einspringt, bestimmen Min-SOC, Betriebsart und Wechselrichtereinstellungen. Der betrachtete Zeitraum reicht vom Abrufzeitpunkt der aktuellen Prognose bis `Sonnenuntergang − Fertig-vor-Sonnenuntergang`. Angebrochene erste, letzte und laufende Viertelstunden werden nur mit ihrem tatsächlichen Zeitanteil berücksichtigt. Die SOC-Regelung bewertet den Plan an den Viertelstundengrenzen neu und prüft das konfigurierte Ladeende zusätzlich exakt. Schlägt eine Modbusabfrage fehl, wird bereits nach fünf Minuten erneut versucht.
 
-### 12.3 SOC-Fahrplan
+### 14.3 SOC-Fahrplan
 
 Beim Erstellen der Prognose wird der direkte Batterie-SOC als Start-SOC festgehalten.
 
@@ -503,7 +521,7 @@ Werte unter 3 % bleiben für besondere Anlagenkonfigurationen auswählbar. Da de
 
 Zum geplanten Ladeende wird der konfigurierte Max-SOC als Sonderfreigabe geschrieben. Fehlen direkte SOC- oder frische Wetterdaten, wird der Max-SOC einmalig sicher freigegeben. Diese Sonderfälle werden getrennt von normalen Regelwrites gezählt.
 
-### 12.4 Lernendes 15-Minuten-Lastprofil
+### 14.4 Lernendes 15-Minuten-Lastprofil
 
 Der Tag ist in 96 Viertelstunden unterteilt. Pro Wochentag werden Grundlast, Ereignisleistung und Ereigniswahrscheinlichkeit gespeichert. Eigene aktive Überschusslasten werden vor dem Lernen abgezogen. Diese 15-Minuten-Auflösung wird nicht nur angezeigt und gespeichert, sondern ab Version 1.2.0 vollständig in der Energie- und SOC-Prognose verwendet.
 
@@ -521,7 +539,7 @@ erwartete Last
 
 Liegt die Beobachtung deutlich über der Grundlast und über der eingestellten Großlastschwelle, wird der Mehrverbrauch als Ereignis gelernt. Dadurch kann etwa eine regelmäßig nachmittags stattfindende Autoladung nach mehreren passenden Tagen mit ihrer bisherigen Wahrscheinlichkeit berücksichtigt werden. Überschreitet diese erwartete Last später die prognostizierte PV-Leistung, fließt die Differenz als negative Batterieenergie in den Fahrplan ein. Spontane, zuvor nicht gelernte Verbraucher können dagegen nicht vorausgesagt werden.
 
-### 12.5 Kumulative Überschuss-Stufen
+### 14.5 Kumulative Überschuss-Stufen
 
 ```text
 verfügbarer Überschuss
@@ -538,7 +556,7 @@ Ausschaltschwelle
 
 Eine Stufe schaltet erst, wenn die entsprechende Bedingung zusätzlich für ihre Ein- oder Ausschaltverzögerung stabil war. Deaktivierte Nummern werden übersprungen und tragen nichts zur Summe bei.
 
-### 12.6 Rundsteuerempfänger und Exportlimit
+### 14.6 Rundsteuerempfänger und Exportlimit
 
 ```text
 installierte Gesamtleistung [W]
@@ -568,7 +586,7 @@ kein Eingang aktiv → kein neuer Schreibzugriff; letzter Wechselrichterwert ble
 
 Jede neue Kontaktlage muss zwei Sekunden stabil bleiben. Dadurch erzeugen kurzzeitige Überschneidungen beim mechanischen Umschalten keine unkontrollierten Schreibfolgen; falls Kontakte tatsächlich gleichzeitig aktiv bleiben, gewinnt aus Sicherheitsgründen die strengste Begrenzung.
 
-### 12.7 Anlagenverlauf
+### 14.7 Anlagenverlauf
 
 Leistungen werden im gespeicherten Ringpuffer platzsparend in 10-W-Schritten abgelegt, der SOC in 0,1-%-Schritten. Für die Anzeige werden sie wieder zurückgerechnet:
 
@@ -579,7 +597,7 @@ SOC [%]      = gespeicherter Wert × 0,1
 
 Beim Netzanschlusspunkt wird ein positiver Wert der Einspeisung und der Betrag eines negativen Werts dem Netzbezug zugeordnet. Der jeweils andere Anteil wird als null dargestellt.
 
-### 12.8 Dynamischer Stromtarif
+### 14.8 Dynamischer Stromtarif
 
 Ausgehend vom aktuellen absoluten SOC wird jede prognostizierte Viertelstunde bis zum nächsten geplanten Ladeende verrechnet:
 

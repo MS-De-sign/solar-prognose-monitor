@@ -30,7 +30,9 @@
 #include <Update.h>
 #include <esp_partition.h>
 #include <esp_ota_ops.h>
+#include <esp_system.h>
 #include <nvs_flash.h>
+#include <new>
 #include <stdarg.h>
 #include <time.h>
 
@@ -63,7 +65,7 @@
 */
 
 namespace ConfigDefaults {
-constexpr char FIRMWARE_VERSION[] = "1.5.1";
+constexpr char FIRMWARE_VERSION[] = "1.6.0";
 constexpr char MANUFACTURER[] = "MS-De-sign / Marcus Sonntag";
 constexpr char LICENSE_TEXT[] = "PolyForm Noncommercial License 1.0.0";
 constexpr char PROJECT_URL[] = "https://github.com/MS-De-sign/solar-prognose-monitor";
@@ -817,14 +819,151 @@ struct __attribute__((packed)) HistoryFileHeader {
   uint32_t crc;
 };
 
+// Das portable Sicherungsformat ist absichtlich unabhaengig vom rohen NVS-
+// Layout. Dadurch kann eine Sicherung auch auf einem Ersatzgeraet sowie
+// zwischen der 4-MB- und 8-MB-Variante wiederhergestellt werden.
+struct __attribute__((packed)) BackupPvArrayV1 {
+  uint8_t enabled;
+  char name[29];
+  float peakKwp;
+  uint8_t tiltDegrees;
+  int16_t azimuthDegrees;
+};
+
+struct __attribute__((packed)) BackupRippleInputV1 {
+  uint8_t enabled;
+  uint8_t gpio;
+  uint8_t percent;
+  uint8_t activeLow;
+};
+
+struct __attribute__((packed)) BackupSurplusStageV1 {
+  uint16_t watts;
+  uint16_t onDelaySeconds;
+  uint16_t offDelaySeconds;
+  uint8_t enabled;
+  uint8_t type;
+  uint8_t gpio;
+  uint8_t method;
+  char onUrl[256];
+  char offUrl[256];
+  char onJson[1001];
+  char offJson[1001];
+};
+
+struct __attribute__((packed)) BackupConfigV1 {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t size;
+  char sourceFirmware[16];
+  char wifiSsid[33];
+  char wifiPassword[65];
+  char modbusHost[65];
+  uint16_t modbusPort;
+  uint8_t inverterUnit;
+  uint8_t batteryTcpUnit;
+  uint8_t batteryRtuUnit;
+  uint16_t pollSeconds;
+  uint8_t modbusMode;
+  uint32_t rs485Baud;
+  uint8_t rs485RxPin;
+  uint8_t rs485TxPin;
+  uint8_t rs485DePin;
+  uint8_t forecastEnabled;
+  uint8_t forecastBypass;
+  uint8_t chargingStrategy;
+  float latitude;
+  float longitude;
+  uint8_t maxSoc;
+  uint16_t finishBufferMinutes;
+  uint8_t forecastSafetyPercent;
+  uint8_t pvSystemEfficiencyPercent;
+  uint8_t batteryChargeEfficiencyPercent;
+  uint8_t batteryDischargeEfficiencyPercent;
+  uint8_t socStepPercent;
+  uint16_t minimumWriteMinutes;
+  uint8_t maximumWritesPerDay;
+  uint8_t forecastFetchHours;
+  uint8_t forecastStaleHours;
+  uint8_t learningPercent;
+  uint16_t eventLoadThresholdWatts;
+  BackupPvArrayV1 pvArrays[PV_ARRAY_COUNT];
+  uint8_t rippleEnabled;
+  uint8_t rippleSignalMode;
+  BackupRippleInputV1 rippleInputs[RIPPLE_INPUT_COUNT];
+  uint8_t pushoverEnabled;
+  char pushoverAppToken[31];
+  char pushoverUserKey[31];
+  char pushoverDevice[26];
+  uint16_t pushoverFailureDelaySeconds;
+  uint16_t pushoverRetryMinutes;
+  uint8_t pushoverNotifyStartup;
+  uint8_t pushoverNotifyModbus;
+  uint8_t pushoverNotifyGrid;
+  uint8_t pushoverDailyPv;
+  uint8_t pushoverDailyBattery;
+  uint8_t pushoverNotifyUpdate;
+  uint8_t mqttEnabled;
+  char mqttHost[65];
+  uint16_t mqttPort;
+  char mqttUsername[65];
+  char mqttPassword[129];
+  char mqttBaseTopic[161];
+  uint16_t mqttPublishIntervalSeconds;
+  uint8_t mqttRetainValues;
+  uint8_t mqttHomeAssistantDiscovery;
+  char mqttDiscoveryPrefix[81];
+  uint8_t tariffPlanningEnabled;
+  uint8_t tariffAutomationApproved;
+  uint8_t tariffProvider;
+  char tariffApiUrl[501];
+  char tariffToken[301];
+  float tariffMaximumCents;
+  float tariffReferenceCents;
+  float tariffMinimumSavingCents;
+  float tariffSurchargeCents;
+  float tariffVatPercent;
+  uint8_t tariffMaximumGridSoc;
+  uint8_t tariffReservePercent;
+  uint8_t webDebugEnabled;
+  BackupSurplusStageV1 surplusStages[SURPLUS_STAGE_COUNT];
+  uint32_t crc;
+};
+
+struct __attribute__((packed)) BackupArchiveHeaderV1 {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t headerSize;
+  uint32_t createdEpoch;
+  uint32_t configSize;
+  uint32_t configCrc;
+  uint32_t profileSize;
+  uint32_t profileCrc;
+  uint16_t historyCount;
+  uint16_t reserved;
+  uint32_t totalSize;
+  uint32_t headerCrc;
+};
+
+struct __attribute__((packed)) BackupHistoryEntryV1 {
+  char fileName[13];
+  uint32_t size;
+  uint32_t crc;
+};
+
 constexpr uint32_t LOAD_PROFILE_MAGIC = 0x53474C50UL;
 constexpr uint16_t LOAD_PROFILE_VERSION = 2;
 constexpr uint32_t HISTORY_MAGIC = 0x53474853UL;
 constexpr uint16_t HISTORY_VERSION = 1;
 constexpr uint32_t HISTORY_FILE_MAGIC = 0x53474846UL;
 constexpr uint16_t HISTORY_FILE_VERSION = 1;
+constexpr uint32_t BACKUP_CONFIG_MAGIC = 0x53504346UL;  // SPCF
+constexpr uint32_t BACKUP_ARCHIVE_MAGIC = 0x5350424BUL; // SPBK
+constexpr uint16_t BACKUP_FORMAT_VERSION = 1;
+constexpr size_t BACKUP_MAX_HISTORY_FILES = 40;
 static_assert(sizeof(LoadProfileData) < 8192, "Das Lastprofil muss kompakt genug fuer NVS bleiben.");
 static_assert(sizeof(HistoryData) < 5000, "Der 24-Stunden-RAM-Puffer muss kompakt bleiben.");
+static_assert(sizeof(BackupConfigV1) < 20000, "Die portable Konfiguration muss kompakt bleiben.");
 ForecastState forecast;
 TariffState tariff;
 LoadProfileData loadProfile;
@@ -886,6 +1025,12 @@ bool browserUpdateForced = false;
 String browserUpdateMessage;
 String browserUpdatePersistenceWarning;
 bool firmwareUpdateInProgress = false;
+bool backupRestoreSuccess = false;
+bool backupRestoreRejected = false;
+String backupRestoreMessage;
+const esp_partition_t *backupRestorePartition = nullptr;
+size_t backupRestoreBytes = 0;
+size_t backupRestoreCapacity = 0;
 
 Preferences preferences;
 WebServer server(80);
@@ -3934,6 +4079,300 @@ bool saveStoredProfile() {
   return true;
 }
 
+template <size_t N>
+void copyBackupText(char (&target)[N], const String &source) {
+  memset(target, 0, N);
+  const size_t count = min(source.length(), N - 1);
+  if (count > 0) memcpy(target, source.c_str(), count);
+}
+
+template <size_t N>
+String backupText(const char (&source)[N]) {
+  size_t length = 0;
+  while (length < N && source[length] != '\0') ++length;
+  return String(source, length);
+}
+
+uint32_t backupConfigCrcFor(const BackupConfigV1 &snapshot) {
+  return crc32Bytes(reinterpret_cast<const uint8_t *>(&snapshot), offsetof(BackupConfigV1, crc));
+}
+
+uint32_t backupHeaderCrcFor(const BackupArchiveHeaderV1 &header) {
+  return crc32Bytes(reinterpret_cast<const uint8_t *>(&header), offsetof(BackupArchiveHeaderV1, headerCrc));
+}
+
+void createBackupConfig(BackupConfigV1 &snapshot) {
+  memset(&snapshot, 0, sizeof(snapshot));
+  snapshot.magic = BACKUP_CONFIG_MAGIC;
+  snapshot.version = BACKUP_FORMAT_VERSION;
+  snapshot.size = sizeof(snapshot);
+  copyBackupText(snapshot.sourceFirmware, ConfigDefaults::FIRMWARE_VERSION);
+  copyBackupText(snapshot.wifiSsid, config.wifiSsid);
+  copyBackupText(snapshot.wifiPassword, config.wifiPassword);
+  copyBackupText(snapshot.modbusHost, config.modbusHost);
+  snapshot.modbusPort = config.modbusPort;
+  snapshot.inverterUnit = config.inverterUnit;
+  snapshot.batteryTcpUnit = config.batteryTcpUnit;
+  snapshot.batteryRtuUnit = config.batteryRtuUnit;
+  snapshot.pollSeconds = config.pollSeconds;
+  snapshot.modbusMode = config.modbusMode;
+  snapshot.rs485Baud = config.rs485Baud;
+  snapshot.rs485RxPin = config.rs485RxPin;
+  snapshot.rs485TxPin = config.rs485TxPin;
+  snapshot.rs485DePin = config.rs485DePin;
+  snapshot.forecastEnabled = config.forecastEnabled;
+  snapshot.forecastBypass = config.forecastBypass;
+  snapshot.chargingStrategy = config.chargingStrategy;
+  snapshot.latitude = config.latitude;
+  snapshot.longitude = config.longitude;
+  snapshot.maxSoc = config.maxSoc;
+  snapshot.finishBufferMinutes = config.finishBufferMinutes;
+  snapshot.forecastSafetyPercent = config.forecastSafetyPercent;
+  snapshot.pvSystemEfficiencyPercent = config.pvSystemEfficiencyPercent;
+  snapshot.batteryChargeEfficiencyPercent = config.batteryChargeEfficiencyPercent;
+  snapshot.batteryDischargeEfficiencyPercent = config.batteryDischargeEfficiencyPercent;
+  snapshot.socStepPercent = config.socStepPercent;
+  snapshot.minimumWriteMinutes = config.minimumWriteMinutes;
+  snapshot.maximumWritesPerDay = config.maximumWritesPerDay;
+  snapshot.forecastFetchHours = config.forecastFetchHours;
+  snapshot.forecastStaleHours = config.forecastStaleHours;
+  snapshot.learningPercent = config.learningPercent;
+  snapshot.eventLoadThresholdWatts = config.eventLoadThresholdWatts;
+  for (size_t i = 0; i < PV_ARRAY_COUNT; ++i) {
+    snapshot.pvArrays[i].enabled = config.pvArrays[i].enabled;
+    copyBackupText(snapshot.pvArrays[i].name, config.pvArrays[i].name);
+    snapshot.pvArrays[i].peakKwp = config.pvArrays[i].peakKwp;
+    snapshot.pvArrays[i].tiltDegrees = config.pvArrays[i].tiltDegrees;
+    snapshot.pvArrays[i].azimuthDegrees = config.pvArrays[i].azimuthDegrees;
+  }
+  snapshot.rippleEnabled = config.rippleEnabled;
+  snapshot.rippleSignalMode = config.rippleSignalMode;
+  for (size_t i = 0; i < RIPPLE_INPUT_COUNT; ++i) {
+    snapshot.rippleInputs[i].enabled = config.rippleInputs[i].enabled;
+    snapshot.rippleInputs[i].gpio = config.rippleInputs[i].gpio;
+    snapshot.rippleInputs[i].percent = config.rippleInputs[i].percent;
+    snapshot.rippleInputs[i].activeLow = config.rippleInputs[i].activeLow;
+  }
+  snapshot.pushoverEnabled = config.pushoverEnabled;
+  copyBackupText(snapshot.pushoverAppToken, config.pushoverAppToken);
+  copyBackupText(snapshot.pushoverUserKey, config.pushoverUserKey);
+  copyBackupText(snapshot.pushoverDevice, config.pushoverDevice);
+  snapshot.pushoverFailureDelaySeconds = config.pushoverFailureDelaySeconds;
+  snapshot.pushoverRetryMinutes = config.pushoverRetryMinutes;
+  snapshot.pushoverNotifyStartup = config.pushoverNotifyStartup;
+  snapshot.pushoverNotifyModbus = config.pushoverNotifyModbus;
+  snapshot.pushoverNotifyGrid = config.pushoverNotifyGrid;
+  snapshot.pushoverDailyPv = config.pushoverDailyPv;
+  snapshot.pushoverDailyBattery = config.pushoverDailyBattery;
+  snapshot.pushoverNotifyUpdate = config.pushoverNotifyUpdate;
+  snapshot.mqttEnabled = config.mqttEnabled;
+  copyBackupText(snapshot.mqttHost, config.mqttHost);
+  snapshot.mqttPort = config.mqttPort;
+  copyBackupText(snapshot.mqttUsername, config.mqttUsername);
+  copyBackupText(snapshot.mqttPassword, config.mqttPassword);
+  copyBackupText(snapshot.mqttBaseTopic, config.mqttBaseTopic);
+  snapshot.mqttPublishIntervalSeconds = config.mqttPublishIntervalSeconds;
+  snapshot.mqttRetainValues = config.mqttRetainValues;
+  snapshot.mqttHomeAssistantDiscovery = config.mqttHomeAssistantDiscovery;
+  copyBackupText(snapshot.mqttDiscoveryPrefix, config.mqttDiscoveryPrefix);
+  snapshot.tariffPlanningEnabled = config.tariffPlanningEnabled;
+  snapshot.tariffAutomationApproved = config.tariffAutomationApproved;
+  snapshot.tariffProvider = config.tariffProvider;
+  copyBackupText(snapshot.tariffApiUrl, config.tariffApiUrl);
+  copyBackupText(snapshot.tariffToken, config.tariffToken);
+  snapshot.tariffMaximumCents = config.tariffMaximumCents;
+  snapshot.tariffReferenceCents = config.tariffReferenceCents;
+  snapshot.tariffMinimumSavingCents = config.tariffMinimumSavingCents;
+  snapshot.tariffSurchargeCents = config.tariffSurchargeCents;
+  snapshot.tariffVatPercent = config.tariffVatPercent;
+  snapshot.tariffMaximumGridSoc = config.tariffMaximumGridSoc;
+  snapshot.tariffReservePercent = config.tariffReservePercent;
+  snapshot.webDebugEnabled = webDebugEnabled;
+  for (size_t i = 0; i < SURPLUS_STAGE_COUNT; ++i) {
+    const SurplusStageConfig &source = surplusStages[i];
+    BackupSurplusStageV1 &target = snapshot.surplusStages[i];
+    target.watts = source.watts;
+    target.onDelaySeconds = source.onDelaySeconds;
+    target.offDelaySeconds = source.offDelaySeconds;
+    target.enabled = source.enabled;
+    target.type = static_cast<uint8_t>(source.type);
+    target.gpio = source.gpio;
+    target.method = static_cast<uint8_t>(source.method);
+    copyBackupText(target.onUrl, source.onUrl);
+    copyBackupText(target.offUrl, source.offUrl);
+    copyBackupText(target.onJson, source.onJson);
+    copyBackupText(target.offJson, source.offJson);
+  }
+  snapshot.crc = backupConfigCrcFor(snapshot);
+}
+
+bool validBackupConfig(const BackupConfigV1 &snapshot) {
+  return snapshot.magic == BACKUP_CONFIG_MAGIC
+      && snapshot.version == BACKUP_FORMAT_VERSION
+      && snapshot.size == sizeof(snapshot)
+      && snapshot.crc == backupConfigCrcFor(snapshot);
+}
+
+void applyBackupConfig(const BackupConfigV1 &snapshot) {
+  config.wifiSsid = backupText(snapshot.wifiSsid);
+  config.wifiPassword = backupText(snapshot.wifiPassword);
+  config.modbusHost = backupText(snapshot.modbusHost);
+  config.modbusPort = snapshot.modbusPort;
+  config.inverterUnit = snapshot.inverterUnit;
+  config.batteryTcpUnit = snapshot.batteryTcpUnit;
+  config.batteryRtuUnit = snapshot.batteryRtuUnit;
+  config.pollSeconds = snapshot.pollSeconds;
+  config.modbusMode = snapshot.modbusMode;
+  config.rs485Baud = snapshot.rs485Baud;
+  config.rs485RxPin = snapshot.rs485RxPin;
+  config.rs485TxPin = snapshot.rs485TxPin;
+  config.rs485DePin = snapshot.rs485DePin;
+  config.forecastEnabled = snapshot.forecastEnabled != 0;
+  config.forecastBypass = snapshot.forecastBypass != 0;
+  config.chargingStrategy = snapshot.chargingStrategy;
+  config.latitude = snapshot.latitude;
+  config.longitude = snapshot.longitude;
+  config.maxSoc = snapshot.maxSoc;
+  config.finishBufferMinutes = snapshot.finishBufferMinutes;
+  config.forecastSafetyPercent = snapshot.forecastSafetyPercent;
+  config.pvSystemEfficiencyPercent = snapshot.pvSystemEfficiencyPercent;
+  config.batteryChargeEfficiencyPercent = snapshot.batteryChargeEfficiencyPercent;
+  config.batteryDischargeEfficiencyPercent = snapshot.batteryDischargeEfficiencyPercent;
+  config.socStepPercent = snapshot.socStepPercent;
+  config.minimumWriteMinutes = snapshot.minimumWriteMinutes;
+  config.maximumWritesPerDay = snapshot.maximumWritesPerDay;
+  config.forecastFetchHours = snapshot.forecastFetchHours;
+  config.forecastStaleHours = snapshot.forecastStaleHours;
+  config.learningPercent = snapshot.learningPercent;
+  config.eventLoadThresholdWatts = snapshot.eventLoadThresholdWatts;
+  for (size_t i = 0; i < PV_ARRAY_COUNT; ++i) {
+    config.pvArrays[i].enabled = snapshot.pvArrays[i].enabled != 0;
+    config.pvArrays[i].name = backupText(snapshot.pvArrays[i].name);
+    config.pvArrays[i].peakKwp = snapshot.pvArrays[i].peakKwp;
+    config.pvArrays[i].tiltDegrees = snapshot.pvArrays[i].tiltDegrees;
+    config.pvArrays[i].azimuthDegrees = snapshot.pvArrays[i].azimuthDegrees;
+  }
+  config.rippleEnabled = snapshot.rippleEnabled != 0;
+  config.rippleSignalMode = snapshot.rippleSignalMode;
+  for (size_t i = 0; i < RIPPLE_INPUT_COUNT; ++i) {
+    config.rippleInputs[i].enabled = snapshot.rippleInputs[i].enabled != 0;
+    config.rippleInputs[i].gpio = snapshot.rippleInputs[i].gpio;
+    config.rippleInputs[i].percent = snapshot.rippleInputs[i].percent;
+    config.rippleInputs[i].activeLow = snapshot.rippleInputs[i].activeLow != 0;
+  }
+  config.pushoverEnabled = snapshot.pushoverEnabled != 0;
+  config.pushoverAppToken = backupText(snapshot.pushoverAppToken);
+  config.pushoverUserKey = backupText(snapshot.pushoverUserKey);
+  config.pushoverDevice = backupText(snapshot.pushoverDevice);
+  config.pushoverFailureDelaySeconds = snapshot.pushoverFailureDelaySeconds;
+  config.pushoverRetryMinutes = snapshot.pushoverRetryMinutes;
+  config.pushoverNotifyStartup = snapshot.pushoverNotifyStartup != 0;
+  config.pushoverNotifyModbus = snapshot.pushoverNotifyModbus != 0;
+  config.pushoverNotifyGrid = snapshot.pushoverNotifyGrid != 0;
+  config.pushoverDailyPv = snapshot.pushoverDailyPv != 0;
+  config.pushoverDailyBattery = snapshot.pushoverDailyBattery != 0;
+  config.pushoverNotifyUpdate = snapshot.pushoverNotifyUpdate != 0;
+  config.mqttEnabled = snapshot.mqttEnabled != 0;
+  config.mqttHost = backupText(snapshot.mqttHost);
+  config.mqttPort = snapshot.mqttPort;
+  config.mqttUsername = backupText(snapshot.mqttUsername);
+  config.mqttPassword = backupText(snapshot.mqttPassword);
+  config.mqttBaseTopic = backupText(snapshot.mqttBaseTopic);
+  config.mqttPublishIntervalSeconds = snapshot.mqttPublishIntervalSeconds;
+  config.mqttRetainValues = snapshot.mqttRetainValues != 0;
+  config.mqttHomeAssistantDiscovery = snapshot.mqttHomeAssistantDiscovery != 0;
+  config.mqttDiscoveryPrefix = backupText(snapshot.mqttDiscoveryPrefix);
+  config.tariffPlanningEnabled = snapshot.tariffPlanningEnabled != 0;
+  config.tariffAutomationApproved = snapshot.tariffAutomationApproved != 0;
+  config.tariffProvider = snapshot.tariffProvider;
+  config.tariffApiUrl = backupText(snapshot.tariffApiUrl);
+  config.tariffToken = backupText(snapshot.tariffToken);
+  config.tariffMaximumCents = snapshot.tariffMaximumCents;
+  config.tariffReferenceCents = snapshot.tariffReferenceCents;
+  config.tariffMinimumSavingCents = snapshot.tariffMinimumSavingCents;
+  config.tariffSurchargeCents = snapshot.tariffSurchargeCents;
+  config.tariffVatPercent = snapshot.tariffVatPercent;
+  config.tariffMaximumGridSoc = snapshot.tariffMaximumGridSoc;
+  config.tariffReservePercent = snapshot.tariffReservePercent;
+  webDebugEnabled = snapshot.webDebugEnabled != 0;
+  for (size_t i = 0; i < SURPLUS_STAGE_COUNT; ++i) {
+    const BackupSurplusStageV1 &source = snapshot.surplusStages[i];
+    SurplusStageConfig &target = surplusStages[i];
+    target.watts = source.watts;
+    target.onDelaySeconds = source.onDelaySeconds;
+    target.offDelaySeconds = source.offDelaySeconds;
+    target.enabled = source.enabled != 0;
+    target.type = static_cast<StageType>(source.type);
+    target.gpio = source.gpio;
+    target.method = static_cast<ApiMethod>(source.method);
+    target.onUrl = backupText(source.onUrl);
+    target.offUrl = backupText(source.offUrl);
+    target.onJson = backupText(source.onJson);
+    target.offJson = backupText(source.offJson);
+  }
+  // Laufende Schreibauftraege werden nie aus einer Sicherung reaktiviert.
+  tariff.recoveryPending = false;
+  forecastRestorePending = false;
+  rippleReleasePending = false;
+  if (config.modbusPort == 0) config.modbusPort = ConfigDefaults::MODBUS_PORT;
+  if (config.inverterUnit == 0) config.inverterUnit = ConfigDefaults::MODBUS_UNIT;
+  if (config.batteryTcpUnit == 0) config.batteryTcpUnit = ConfigDefaults::BATTERY_TCP_UNIT;
+  if (config.batteryRtuUnit == 0) config.batteryRtuUnit = ConfigDefaults::BATTERY_RTU_UNIT;
+  if (config.pollSeconds < 2 || config.pollSeconds > 300) config.pollSeconds = ConfigDefaults::POLL_SECONDS;
+  if (!isPushoverDevice(config.pushoverDevice)) config.pushoverDevice = "";
+  if (config.pushoverFailureDelaySeconds < 10 || config.pushoverFailureDelaySeconds > 3600) {
+    config.pushoverFailureDelaySeconds = ConfigDefaults::PUSHOVER_FAILURE_DELAY_SECONDS;
+  }
+  if (config.pushoverRetryMinutes < 1 || config.pushoverRetryMinutes > 1440) {
+    config.pushoverRetryMinutes = ConfigDefaults::PUSHOVER_RETRY_MINUTES;
+  }
+  config.mqttHost.trim();
+  config.mqttUsername.trim();
+  if (config.mqttUsername.isEmpty()) config.mqttPassword = "";
+  if (config.mqttPort == 0) config.mqttPort = ConfigDefaults::MQTT_PORT;
+  if (config.mqttPublishIntervalSeconds < 5 || config.mqttPublishIntervalSeconds > 3600) {
+    config.mqttPublishIntervalSeconds = ConfigDefaults::MQTT_PUBLISH_INTERVAL_SECONDS;
+  }
+  config.mqttBaseTopic = normalizeMqttTopic(config.mqttBaseTopic, defaultMqttBaseTopic());
+  config.mqttDiscoveryPrefix = normalizeMqttTopic(config.mqttDiscoveryPrefix, "homeassistant");
+  if (config.mqttHost.isEmpty()) config.mqttEnabled = false;
+  sanitizeModbusConfig();
+  sanitizeSurplusConfig();
+  sanitizeForecastConfig();
+  sanitizeRippleConfig();
+}
+
+uint32_t crc32File(File &file) {
+  if (!file || !file.seek(0)) return 0;
+  uint32_t crc = 0xFFFFFFFFUL;
+  uint8_t buffer[512];
+  while (file.available()) {
+    const size_t count = file.read(buffer, sizeof(buffer));
+    if (count == 0) break;
+    for (size_t i = 0; i < count; ++i) {
+      crc ^= buffer[i];
+      for (uint8_t bit = 0; bit < 8; ++bit) crc = (crc & 1U) ? (crc >> 1) ^ 0xEDB88320UL : crc >> 1;
+    }
+  }
+  file.seek(0);
+  return ~crc;
+}
+
+bool backupHistoryName(const String &path, char (&target)[13]) {
+  const int slash = path.lastIndexOf('/');
+  const String name = slash >= 0 ? path.substring(slash + 1) : path;
+  if (name.length() != 12 || !name.endsWith(".bin")) return false;
+  for (size_t i = 0; i < 8; ++i) if (!isDigit(name[i])) return false;
+  copyBackupText(target, name);
+  return true;
+}
+
+bool validBackupHistoryName(const char (&name)[13]) {
+  if (name[12] != '\0' || strcmp(name + 8, ".bin") != 0) return false;
+  for (size_t i = 0; i < 8; ++i) if (!isDigit(name[i])) return false;
+  return true;
+}
+
 uint16_t expectedLoadWatts(time_t epoch) {
   const uint8_t day = profileDayFor(epoch);
   const uint8_t slot = profileSlotFor(epoch);
@@ -5415,11 +5854,20 @@ void addNoCacheHeaders() {
 }
 
 void injectMqttNavigation(String &page) {
-  if (page.indexOf("href=\"/mqtt\"") >= 0 || page.indexOf("href='/mqtt'") >= 0) return;
-  page.replace("<a href=\"/settings\">Einstellungen</a>",
-               "<a href=\"/mqtt\">Daten</a><a href=\"/settings\">Einstellungen</a>");
-  page.replace("<a class=\"active\" aria-current=\"page\" href=\"/settings\">Einstellungen</a>",
-               "<a href=\"/mqtt\">Daten</a><a class=\"active\" aria-current=\"page\" href=\"/settings\">Einstellungen</a>");
+  const bool hasMqtt = page.indexOf("href=\"/mqtt\"") >= 0 || page.indexOf("href='/mqtt'") >= 0;
+  const bool hasSystem = page.indexOf("href=\"/system\"") >= 0 || page.indexOf("href='/system'") >= 0;
+  if (!hasMqtt) {
+    page.replace("<a href=\"/settings\">Einstellungen</a>",
+                 "<a href=\"/mqtt\">Daten</a><a href=\"/settings\">Einstellungen</a>");
+    page.replace("<a class=\"active\" aria-current=\"page\" href=\"/settings\">Einstellungen</a>",
+                 "<a href=\"/mqtt\">Daten</a><a class=\"active\" aria-current=\"page\" href=\"/settings\">Einstellungen</a>");
+  }
+  if (!hasSystem) {
+    page.replace("<a href=\"/firmware\">Firmware</a>",
+                 "<a href=\"/system\">System</a><a href=\"/firmware\">Firmware</a>");
+    page.replace("<a class=\"active\" aria-current=\"page\" href=\"/firmware\">Firmware</a>",
+                 "<a href=\"/system\">System</a><a class=\"active\" aria-current=\"page\" href=\"/firmware\">Firmware</a>");
+  }
 }
 
 void sendHtmlPageWithMqttNavigation(const char *pageInProgramMemory) {
@@ -6596,6 +7044,567 @@ void handleLoadProfileReset() {
   addNoCacheHeaders(); server.send(200, "application/json", "{\"reset\":true}");
 }
 
+const char SYSTEM_HTML[] PROGMEM = R"HTML(
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>System · Solar Prognose Monitor</title><style>:root{--bg:#f3f5f7;--text:#17212b;--muted:#64717d;--accent:#087f5b;--line:#dfe4e8;--bad:#b42318;--warn:#9a6700}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{background:#fff;border-bottom:1px solid var(--line)}.bar{max-width:1120px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}.nav{display:flex;gap:6px;overflow-x:auto}.nav a{white-space:nowrap;color:var(--text);text-decoration:none;padding:8px 10px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}main{max-width:1120px;margin:22px auto;padding:0 18px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}.grid .card{margin:0}h2{font-size:17px;margin:0 0 12px}.hint{color:var(--muted);line-height:1.55}.button{display:inline-block;border:0;border-radius:9px;background:var(--accent);color:#fff;padding:10px 14px;font:inherit;font-weight:650;cursor:pointer;text-decoration:none}.button.secondary{background:#66727d}.button.danger{background:var(--bad)}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 5px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:600;width:44%}.ok{color:#087f5b}.bad{color:var(--bad)}.warn{color:var(--warn)}input[type=file]{display:block;width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;margin:10px 0}progress{width:100%;margin-top:10px}.checklist{list-style:none;padding:0;margin:0}.checklist li{padding:8px 0;border-bottom:1px solid var(--line)}.checklist span{display:inline-block;width:1.5em;font-weight:800}.notice{border-left:4px solid var(--warn);padding:10px 12px;background:#fff8e6}.skip-link{position:fixed;left:12px;top:8px;z-index:20;transform:translateY(-150%);background:#fff;color:#17212b;padding:10px 14px;border:2px solid var(--accent);border-radius:8px}.skip-link:focus{transform:none}:focus-visible{outline:3px solid #005fcc;outline-offset:3px}.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}@media(max-width:800px){.bar{align-items:flex-start;flex-wrap:wrap}.nav{width:100%}}</style></head><body><a class="skip-link" href="#main">Zum Hauptinhalt springen</a><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav" aria-label="Hauptnavigation"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a href="/settings">Einstellungen</a><a class="active" aria-current="page" href="/system">System</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header><main id="main" tabindex="-1"><div class="grid"><section class="card"><h2>Systemstatus</h2><table id="status"><tr><td>Diagnose wird geladen …</td></tr></table><div class="row"><button class="button secondary" id="refresh" type="button">Aktualisieren</button><button class="button secondary" id="modbusTest" type="button">Modbus neu prüfen</button></div><p id="actionStatus" class="hint" role="status" aria-live="polite"></p></section><section class="card"><h2>Einrichtungsprüfung</h2><ul class="checklist" id="checklist"><li>Wird geladen …</li></ul><p class="hint">Die Prüfung verändert keine Einstellungen. Nicht benötigte Funktionen dürfen als deaktiviert erscheinen.</p></section></div><section class="card"><h2>Vollständige Sicherung</h2><p>Die Sicherung enthält <b>alle Einstellungen, das gelernte Lastprofil und den Anlagenverlauf</b>. Sie eignet sich auch für den Umzug auf einen Ersatz-ESP32 oder zwischen der 4‑MB- und 8‑MB-Version.</p><p class="notice"><b>Vertraulich behandeln:</b> Die Datei enthält WLAN-, MQTT-, Pushover- und Tarif-Zugangsdaten im Klartext. Sie ist nicht verschlüsselt.</p><div class="row"><a class="button" href="/api/backup/download">Sicherung herunterladen</a></div></section><section class="card"><h2>Sicherung wiederherstellen</h2><p class="hint">Die Datei wird zuerst vollständig in einem unbenutzten Firmware-Slot gespeichert und mit Prüfsummen kontrolliert. Erst danach werden Einstellungen, Lernprofil und Verlauf ersetzt. Aktive Steuerungen und Ausgänge werden vorher sicher beendet. Nach Erfolg startet der ESP32 neu.</p><form id="restoreForm"><label for="backupFile"><b>Sicherungsdatei (.spmbak)</b></label><input id="backupFile" type="file" accept=".spmbak,application/octet-stream" required><label><input id="confirmRestore" type="checkbox" required> Ich bestätige, dass die aktuellen Einstellungen, das Lernprofil und der Verlauf ersetzt werden dürfen.</label><br><br><button class="button danger" type="submit">Sicherung einspielen</button><progress id="restoreProgress" value="0" max="100">0 Prozent</progress><p id="restoreResult" role="status" aria-live="polite"></p></form></section><section class="card"><h2>Supportbericht</h2><p class="hint">Der Bericht enthält System-, Speicher- und Modbuszustände, aber keine Passwörter, Tokens oder API-Inhalte. Er kann einer Fehlermeldung beigefügt werden.</p><a class="button secondary" href="/api/support-report">Supportbericht herunterladen</a></section></main><script>const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const yn=v=>v?'<span class="ok">OK</span>':'<span class="bad">Fehlt</span>';async function load(){try{const r=await fetch('/api/system',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const x=await r.json();document.querySelector('#status').innerHTML=`<tr><th>Firmware</th><td>${esc(x.version)}</td></tr><tr><th>Laufzeit</th><td>${esc(x.uptime)}</td></tr><tr><th>WLAN</th><td>${x.wifiConnected?esc(x.ssid+' · '+x.ip+' · '+x.rssi+' dBm'):'nicht verbunden'}</td></tr><tr><th>Access Point</th><td>${esc(x.apSsid+' · '+x.apIp)}</td></tr><tr><th>Modbus</th><td>${esc(x.modbusMode+' · '+x.modbusStatus)}</td></tr><tr><th>Batteriedaten</th><td>${esc(x.batteryStatus)}</td></tr><tr><th>Freier RAM</th><td>${esc(x.freeHeap+' Byte')}</td></tr><tr><th>Verlauf</th><td>${esc(x.historyFiles+' Dateien · '+x.historyUsedKb+' KB')}</td></tr>`;const checks=[['WLAN verbunden',x.wifiConnected],['Modbus-Adresse eingetragen',x.modbusConfigured],['Wechselrichter antwortet',x.inverterOk],['Direkter Batteriewert verfügbar',x.batteryOk],['Systemzeit synchronisiert',x.timeValid],['PV-Fläche für Prognose eingerichtet',x.pvConfigured],['Lernprofil speicherbar',x.profileOk],['Verlaufsspeicher bereit',x.historyOk]];document.querySelector('#checklist').innerHTML=checks.map(([n,v])=>`<li><span class="${v?'ok':'bad'}">${v?'✓':'!'}</span>${esc(n)}</li>`).join('')}catch(e){document.querySelector('#status').innerHTML='<tr><td class="bad">'+esc(e.message)+'</td></tr>'}}document.querySelector('#refresh').onclick=load;document.querySelector('#modbusTest').onclick=async()=>{const s=document.querySelector('#actionStatus');s.textContent='Neue Abfrage wird gestartet …';try{const r=await fetch('/api/system/modbus-test',{method:'POST'});s.textContent=await r.text();setTimeout(load,3000)}catch(e){s.textContent=e.message}};document.querySelector('#restoreForm').onsubmit=e=>{e.preventDefault();if(!confirm('Aktuelle Einstellungen, Lernprofil und Verlauf wirklich durch diese Sicherung ersetzen?'))return;const f=document.querySelector('#backupFile').files[0],p=document.querySelector('#restoreProgress'),o=document.querySelector('#restoreResult'),xhr=new XMLHttpRequest();xhr.open('POST','/api/backup/restore');xhr.upload.onprogress=e=>{if(e.lengthComputable){p.value=Math.round(e.loaded/e.total*100);p.textContent=p.value+' Prozent'}};xhr.onload=()=>{o.textContent=xhr.responseText;o.className=xhr.status===200?'ok':'bad'};xhr.onerror=()=>{o.textContent='Netzwerkfehler beim Wiederherstellen.';o.className='bad'};const d=new FormData();d.append('backup',f);xhr.send(d)};load();setInterval(load,10000)</script></body></html>
+)HTML";
+
+String resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "Einschalten";
+    case ESP_RST_SW: return "Software-Neustart";
+    case ESP_RST_PANIC: return "Programmabsturz";
+    case ESP_RST_INT_WDT: return "Interrupt-Watchdog";
+    case ESP_RST_TASK_WDT: return "Task-Watchdog";
+    case ESP_RST_WDT: return "Watchdog";
+    case ESP_RST_BROWNOUT: return "Unterspannung";
+    default: return "Grund " + String(static_cast<unsigned int>(reason));
+  }
+}
+
+String configuredModbusModeName() {
+  switch (selectedModbusMode()) {
+    case ModbusMode::TCP_ONLY: return "Modbus TCP";
+    case ModbusMode::RTU_ONLY: return "Modbus RS485";
+    default: return "TCP mit RS485-Fallback";
+  }
+}
+
+size_t historyFileCount() {
+  String names[BACKUP_MAX_HISTORY_FILES];
+  return collectHistoryFiles(names, BACKUP_MAX_HISTORY_FILES);
+}
+
+bool loadProfileIsReady() {
+  return loadProfile.magic == LOAD_PROFILE_MAGIC
+      && loadProfile.version == LOAD_PROFILE_VERSION
+      && (profileDirty || validLoadProfileBlob(loadProfile));
+}
+
+bool hasConfiguredPvArray() {
+  for (size_t i = 0; i < PV_ARRAY_COUNT; ++i) {
+    if (config.pvArrays[i].enabled && config.pvArrays[i].peakKwp > 0.0f) return true;
+  }
+  return false;
+}
+
+void handleSystemPage() {
+  String page = FPSTR(SYSTEM_HTML);
+  injectMqttNavigation(page);
+  addNoCacheHeaders();
+  server.send(200, "text/html; charset=utf-8", page);
+}
+
+void handleSystemApi() {
+  const bool inverterOk = lastSuccessfulInverterCycle != 0
+      && millis() - lastSuccessfulInverterCycle <= max<uint32_t>(30000UL, config.pollSeconds * 4000UL);
+  const bool batteryOk = lastSuccessfulBatteryCycle != 0
+      && millis() - lastSuccessfulBatteryCycle <= max<uint32_t>(60000UL, config.pollSeconds * 8000UL);
+  String json;
+  json.reserve(1400);
+  json += F("{\"version\":\""); json += jsonEscape(ConfigDefaults::FIRMWARE_VERSION);
+  json += F("\",\"uptime\":\""); json += String(millis() / 3600000UL); json += F(" h "); json += String((millis() / 60000UL) % 60UL); json += F(" min");
+  json += F("\",\"resetReason\":\""); json += jsonEscape(resetReasonName(esp_reset_reason()));
+  json += F("\",\"wifiConnected\":"); json += WiFi.status() == WL_CONNECTED ? F("true") : F("false");
+  json += F(",\"ssid\":\""); json += jsonEscape(WiFi.SSID());
+  json += F("\",\"ip\":\""); json += WiFi.localIP().toString();
+  json += F("\",\"rssi\":"); json += String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0);
+  json += F(",\"apSsid\":\""); json += jsonEscape(accessPointSsid);
+  json += F("\",\"apIp\":\""); json += WiFi.softAPIP().toString();
+  json += F("\",\"modbusMode\":\""); json += jsonEscape(configuredModbusModeName());
+  json += F("\",\"modbusStatus\":\""); json += jsonEscape(inverterOk ? lastModbusTransport + " · letzte Abfrage OK" : lastInverterError);
+  json += F("\",\"batteryStatus\":\""); json += jsonEscape(batteryOk ? lastBatteryTransport + " · letzte Abfrage OK" : lastBatteryError);
+  json += F("\",\"freeHeap\":"); json += String(ESP.getFreeHeap());
+  json += F(",\"historyFiles\":"); json += String(historyFileCount());
+  json += F(",\"historyUsedKb\":"); json += String(historyStorageReady ? LittleFS.usedBytes() / 1024UL : 0);
+  json += F(",\"modbusConfigured\":"); json += (!config.modbusHost.isEmpty() || rs485TransportEnabled()) ? F("true") : F("false");
+  json += F(",\"inverterOk\":"); json += inverterOk ? F("true") : F("false");
+  json += F(",\"batteryOk\":"); json += batteryOk ? F("true") : F("false");
+  json += F(",\"timeValid\":"); json += clockIsValid() ? F("true") : F("false");
+  json += F(",\"pvConfigured\":"); json += hasConfiguredPvArray() ? F("true") : F("false");
+  json += F(",\"profileOk\":"); json += loadProfileIsReady() ? F("true") : F("false");
+  json += F(",\"historyOk\":"); json += (historyStorageReady && historyPersistenceOk) ? F("true") : F("false");
+  json += '}';
+  addNoCacheHeaders();
+  server.send(200, "application/json; charset=utf-8", json);
+}
+
+void handleSystemModbusTest() {
+  if (firmwareUpdateInProgress) {
+    server.send(409, "text/plain; charset=utf-8", "Während eines Wartungsvorgangs ist keine Modbus-Prüfung möglich.");
+    return;
+  }
+  modbusClient.stop();
+  pollingCycleActive = false;
+  activeBlock = 0;
+  nextPollAt = 0;
+  debugPrintln("Manuelle Modbus-Prüfung angefordert.");
+  addNoCacheHeaders();
+  server.send(202, "text/plain; charset=utf-8", "Neue Modbus-Abfrage wurde eingeplant. Der Status aktualisiert sich in wenigen Sekunden.");
+}
+
+void handleSupportReport() {
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  const esp_partition_t *profilePartition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
+      ESP_PARTITION_SUBTYPE_DATA_NVS, ConfigDefaults::PROFILE_PARTITION_LABEL);
+  const esp_partition_t *historyPartition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
+      ESP_PARTITION_SUBTYPE_ANY, ConfigDefaults::HISTORY_PARTITION_LABEL);
+  String report;
+  report.reserve(5000);
+  report += F("Solar Prognose Monitor - Supportbericht\r\n");
+  report += F("Firmware: "); report += ConfigDefaults::FIRMWARE_VERSION;
+  report += F("\r\nChip: "); report += ESP.getChipModel(); report += F(" / "); report += String(ESP.getChipCores()); report += F(" Kerne");
+  report += F("\r\nFlash: "); report += String(ESP.getFlashChipSize()); report += F(" Byte");
+  report += F("\r\nApp-Partition: "); report += running ? String(running->label) + " / " + String(running->size) : "nicht erkannt";
+  report += F("\r\nProfil-Partition: "); report += profilePartition ? String(profilePartition->size) + " Byte" : "nicht erkannt";
+  report += F("\r\nVerlauf-Partition: "); report += historyPartition ? String(historyPartition->size) + " Byte" : "nicht erkannt";
+  report += F("\r\nFreier RAM: "); report += String(ESP.getFreeHeap()); report += F(" Byte");
+  report += F("\r\nKleinster freier RAM: "); report += String(ESP.getMinFreeHeap()); report += F(" Byte");
+  report += F("\r\nLaufzeit: "); report += String(millis() / 1000UL); report += F(" Sekunden");
+  report += F("\r\nLetzter Neustart: "); report += resetReasonName(esp_reset_reason());
+  report += F("\r\nUhrzeit gültig: "); report += clockIsValid() ? "ja" : "nein";
+  report += F("\r\n\r\nNetzwerk\r\nWLAN verbunden: "); report += WiFi.status() == WL_CONNECTED ? "ja" : "nein";
+  report += F("\r\nWLAN SSID: "); report += WiFi.SSID();
+  report += F("\r\nWLAN IP: "); report += WiFi.localIP().toString();
+  report += F("\r\nWLAN RSSI: "); report += String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0); report += F(" dBm");
+  report += F("\r\nAP: "); report += accessPointSsid; report += F(" / "); report += WiFi.softAPIP().toString();
+  report += F("\r\n\r\nModbus\r\nBetriebsart: "); report += configuredModbusModeName();
+  report += F("\r\nTCP-Ziel: "); report += config.modbusHost; report += ':'; report += String(config.modbusPort);
+  report += F("\r\nIDs Wechselrichter/Batterie TCP/Batterie RTU: "); report += String(config.inverterUnit); report += '/'; report += String(config.batteryTcpUnit); report += '/'; report += String(config.batteryRtuUnit);
+  report += F("\r\nLetzter Transport: "); report += lastModbusTransport;
+  report += F("\r\nWechselrichterstatus: "); report += lastInverterError;
+  report += F("\r\nBatteriestatus: "); report += lastBatteryError;
+  report += F("\r\nLetzter Modbusfehler: "); report += lastTransactionError;
+  report += F("\r\nLetzte Ausnahme: 0x"); report += String(lastModbusExceptionCode, HEX);
+  report += F("\r\n\r\nDatenhaltung\r\nLernprofil bereit: "); report += loadProfileIsReady() ? "ja" : "nein";
+  report += F("\r\nLernprofil geändert: "); report += profileDirty ? "ja" : "nein";
+  report += F("\r\nVerlauf bereit: "); report += historyStorageReady ? "ja" : "nein";
+  report += F("\r\nVerlauf speicherbar: "); report += historyPersistenceOk ? "ja" : "nein";
+  report += F("\r\nVerlaufsdateien: "); report += String(historyFileCount());
+  report += F("\r\nLittleFS belegt/gesamt: "); report += String(historyStorageReady ? LittleFS.usedBytes() : 0); report += '/'; report += String(historyStorageReady ? LittleFS.totalBytes() : 0);
+  report += F("\r\n\r\nFunktionen\r\nPrognose: "); report += config.forecastEnabled ? (config.forecastBypass ? "Bypass" : "aktiv") : "deaktiviert";
+  report += F("\r\nPrognosestatus: "); report += forecast.status;
+  report += F("\r\nDynamischer Tarif: "); report += config.tariffPlanningEnabled ? "Planung aktiv" : "deaktiviert";
+  report += F("\r\nTarifstatus: "); report += tariff.status;
+  report += F("\r\nMQTT: "); report += mqttStatus;
+  report += F("\r\nRundsteuerung: "); report += rippleStatus;
+  report += F("\r\n\r\nPasswörter, Tokens, API-Inhalte und JSON-Schaltbefehle wurden nicht ausgegeben.\r\n");
+  addNoCacheHeaders();
+  server.sendHeader("Content-Disposition", "attachment; filename=SPM-Supportbericht.txt");
+  server.send(200, "text/plain; charset=utf-8", report);
+}
+
+bool writeBackupHttpBytes(const uint8_t *data, size_t length) {
+  auto &client = server.client();
+  size_t written = 0;
+  while (written < length && client.connected()) {
+    const size_t count = client.write(data + written, length - written);
+    if (count == 0) return false;
+    written += count;
+    delay(0);
+  }
+  return written == length;
+}
+
+bool writeBackupHttpFile(File &file) {
+  if (!file || !file.seek(0)) return false;
+  uint8_t buffer[1024];
+  while (file.available()) {
+    const size_t count = file.read(buffer, sizeof(buffer));
+    if (count == 0 || !writeBackupHttpBytes(buffer, count)) return false;
+  }
+  return true;
+}
+
+void handleBackupDownload() {
+  if (firmwareUpdateInProgress) {
+    server.send(409, "text/plain; charset=utf-8", "Während eines Wartungsvorgangs kann keine Sicherung erstellt werden.");
+    return;
+  }
+  commitLearningBlock();
+  learningLoadSum = 0;
+  learningLoadSamples = 0;
+  activeLearningDay = 255;
+  activeLearningSlot = 255;
+  if (!saveStoredProfile() || !saveStoredHistory(true)) {
+    server.send(500, "text/plain; charset=utf-8",
+                "Sicherung abgebrochen: Lernprofil oder Verlauf konnten vorher nicht verifiziert werden.");
+    return;
+  }
+
+  BackupConfigV1 *snapshot = static_cast<BackupConfigV1 *>(malloc(sizeof(BackupConfigV1)));
+  BackupHistoryEntryV1 *entries = static_cast<BackupHistoryEntryV1 *>(
+      calloc(BACKUP_MAX_HISTORY_FILES, sizeof(BackupHistoryEntryV1)));
+  String *names = new (std::nothrow) String[BACKUP_MAX_HISTORY_FILES];
+  if (snapshot == nullptr || entries == nullptr || names == nullptr) {
+    free(snapshot);
+    free(entries);
+    delete[] names;
+    server.send(500, "text/plain; charset=utf-8", "Sicherung abgebrochen: Nicht genügend freier Arbeitsspeicher.");
+    return;
+  }
+  createBackupConfig(*snapshot);
+  const size_t foundCount = collectHistoryFiles(names, BACKUP_MAX_HISTORY_FILES);
+  size_t historyCount = 0;
+  uint32_t totalSize = sizeof(BackupArchiveHeaderV1) + sizeof(BackupConfigV1) + sizeof(LoadProfileData);
+  bool valid = true;
+  for (size_t i = 0; i < foundCount; ++i) {
+    File file = LittleFS.open(names[i], FILE_READ);
+    HistoryFileHeader historyHeader = {};
+    BackupHistoryEntryV1 entry = {};
+    if (!file || !readHistoryHeader(file, historyHeader)
+        || !backupHistoryName(names[i], entry.fileName)) {
+      if (file) file.close();
+      valid = false;
+      break;
+    }
+    entry.size = file.size();
+    entry.crc = crc32File(file);
+    file.close();
+    if (entry.size < sizeof(HistoryFileHeader)
+        || entry.size > sizeof(HistoryFileHeader) + HISTORY_POINT_COUNT * sizeof(HistorySample)) {
+      valid = false;
+      break;
+    }
+    entries[historyCount++] = entry;
+    totalSize += sizeof(BackupHistoryEntryV1) + entry.size;
+  }
+  if (!valid) {
+    free(snapshot);
+    free(entries);
+    delete[] names;
+    server.send(500, "text/plain; charset=utf-8", "Sicherung abgebrochen: Eine Verlaufsdatei ist ungültig.");
+    return;
+  }
+
+  BackupArchiveHeaderV1 header = {};
+  header.magic = BACKUP_ARCHIVE_MAGIC;
+  header.version = BACKUP_FORMAT_VERSION;
+  header.headerSize = sizeof(header);
+  header.createdEpoch = clockIsValid() ? static_cast<uint32_t>(time(nullptr)) : 0;
+  header.configSize = sizeof(*snapshot);
+  header.configCrc = crc32Bytes(reinterpret_cast<const uint8_t *>(snapshot), sizeof(*snapshot));
+  header.profileSize = sizeof(loadProfile);
+  header.profileCrc = crc32Bytes(reinterpret_cast<const uint8_t *>(&loadProfile), sizeof(loadProfile));
+  header.historyCount = historyCount;
+  header.totalSize = totalSize;
+  header.headerCrc = backupHeaderCrcFor(header);
+
+  char fileName[64];
+  if (clockIsValid()) {
+    tm parts = {};
+    time_t now = time(nullptr);
+    localtime_r(&now, &parts);
+    snprintf(fileName, sizeof(fileName), "SPM-Backup-%04d%02d%02d-%02d%02d%02d.spmbak",
+             parts.tm_year + 1900, parts.tm_mon + 1, parts.tm_mday,
+             parts.tm_hour, parts.tm_min, parts.tm_sec);
+  } else {
+    snprintf(fileName, sizeof(fileName), "SPM-Backup-v%s.spmbak", ConfigDefaults::FIRMWARE_VERSION);
+  }
+  addNoCacheHeaders();
+  server.sendHeader("Content-Disposition", "attachment; filename=\"" + String(fileName) + "\"");
+  server.sendHeader("X-Content-Type-Options", "nosniff");
+  server.setContentLength(totalSize);
+  server.send(200, "application/octet-stream", "");
+  bool sent = writeBackupHttpBytes(reinterpret_cast<const uint8_t *>(&header), sizeof(header))
+      && writeBackupHttpBytes(reinterpret_cast<const uint8_t *>(snapshot), sizeof(*snapshot))
+      && writeBackupHttpBytes(reinterpret_cast<const uint8_t *>(&loadProfile), sizeof(loadProfile));
+  for (size_t i = 0; sent && i < historyCount; ++i) {
+    sent = writeBackupHttpBytes(reinterpret_cast<const uint8_t *>(&entries[i]), sizeof(entries[i]));
+    File file = LittleFS.open(names[i], FILE_READ);
+    sent = sent && writeBackupHttpFile(file);
+    if (file) file.close();
+  }
+  server.client().flush();
+  free(snapshot);
+  free(entries);
+  delete[] names;
+  debugPrintf("Portable Sicherung %s: %u Byte, %u Verlaufsdateien.\n",
+              sent ? "übertragen" : "unvollständig",
+              static_cast<unsigned int>(totalSize), static_cast<unsigned int>(historyCount));
+}
+
+bool readRestorePartition(size_t offset, void *target, size_t length) {
+  return backupRestorePartition != nullptr
+      && offset <= backupRestoreBytes
+      && length <= backupRestoreBytes - offset
+      && esp_partition_read(backupRestorePartition, offset, target, length) == ESP_OK;
+}
+
+uint32_t crc32RestorePartition(size_t offset, size_t length) {
+  if (backupRestorePartition == nullptr || offset > backupRestoreBytes || length > backupRestoreBytes - offset) return 0;
+  uint32_t crc = 0xFFFFFFFFUL;
+  uint8_t buffer[512];
+  size_t done = 0;
+  while (done < length) {
+    const size_t count = min(sizeof(buffer), length - done);
+    if (esp_partition_read(backupRestorePartition, offset + done, buffer, count) != ESP_OK) return 0;
+    for (size_t i = 0; i < count; ++i) {
+      crc ^= buffer[i];
+      for (uint8_t bit = 0; bit < 8; ++bit) crc = (crc & 1U) ? (crc >> 1) ^ 0xEDB88320UL : crc >> 1;
+    }
+    done += count;
+  }
+  return ~crc;
+}
+
+bool validateStagedBackup(BackupArchiveHeaderV1 &header, String &error) {
+  if (!readRestorePartition(0, &header, sizeof(header))) {
+    error = "Dateikopf konnte nicht gelesen werden";
+    return false;
+  }
+  if (header.magic != BACKUP_ARCHIVE_MAGIC || header.version != BACKUP_FORMAT_VERSION
+      || header.headerSize != sizeof(header) || header.headerCrc != backupHeaderCrcFor(header)) {
+    error = "unbekanntes oder beschädigtes Sicherungsformat";
+    return false;
+  }
+  if (header.totalSize != backupRestoreBytes || header.configSize != sizeof(BackupConfigV1)
+      || header.profileSize != sizeof(LoadProfileData) || header.historyCount > BACKUP_MAX_HISTORY_FILES) {
+    error = "unplausible Größenangaben in der Sicherung";
+    return false;
+  }
+  size_t offset = sizeof(header);
+  BackupConfigV1 *snapshot = static_cast<BackupConfigV1 *>(malloc(sizeof(BackupConfigV1)));
+  LoadProfileData *profile = static_cast<LoadProfileData *>(malloc(sizeof(LoadProfileData)));
+  if (snapshot == nullptr || profile == nullptr) {
+    free(snapshot); free(profile);
+    error = "nicht genügend Arbeitsspeicher für die Prüfung";
+    return false;
+  }
+  bool valid = readRestorePartition(offset, snapshot, sizeof(*snapshot))
+      && crc32RestorePartition(offset, sizeof(*snapshot)) == header.configCrc
+      && validBackupConfig(*snapshot);
+  offset += sizeof(*snapshot);
+  valid = valid && readRestorePartition(offset, profile, sizeof(*profile))
+      && crc32RestorePartition(offset, sizeof(*profile)) == header.profileCrc
+      && validLoadProfileBlob(*profile);
+  offset += sizeof(*profile);
+  free(snapshot); free(profile);
+  if (!valid) {
+    error = "Konfiguration oder Lernprofil ist beschädigt";
+    return false;
+  }
+  char previousName[13] = {};
+  for (size_t i = 0; i < header.historyCount; ++i) {
+    BackupHistoryEntryV1 entry = {};
+    HistoryFileHeader fileHeader = {};
+    if (!readRestorePartition(offset, &entry, sizeof(entry))) {
+      error = "Verzeichnis der Verlaufsdaten ist unvollständig";
+      return false;
+    }
+    offset += sizeof(entry);
+    if (!validBackupHistoryName(entry.fileName) || (i > 0 && strcmp(previousName, entry.fileName) >= 0)
+        || entry.size < sizeof(HistoryFileHeader)
+        || entry.size > sizeof(HistoryFileHeader) + HISTORY_POINT_COUNT * sizeof(HistorySample)
+        || offset > backupRestoreBytes || entry.size > backupRestoreBytes - offset
+        || !readRestorePartition(offset, &fileHeader, sizeof(fileHeader))
+        || !validHistoryFileHeader(fileHeader)
+        || (entry.size - sizeof(HistoryFileHeader)) % sizeof(HistorySample) != 0
+        || crc32RestorePartition(offset, entry.size) != entry.crc) {
+      error = "eine Verlaufsdatei ist beschädigt oder unsicher benannt";
+      return false;
+    }
+    memcpy(previousName, entry.fileName, sizeof(previousName));
+    offset += entry.size;
+  }
+  if (offset != backupRestoreBytes) {
+    error = "unerwartete Zusatzdaten am Dateiende";
+    return false;
+  }
+  return true;
+}
+
+bool removeAllHistoryFiles() {
+  String names[BACKUP_MAX_HISTORY_FILES];
+  const size_t count = collectHistoryFiles(names, BACKUP_MAX_HISTORY_FILES);
+  for (size_t i = 0; i < count; ++i) if (!LittleFS.remove(names[i])) return false;
+  return true;
+}
+
+bool restoreHistoryFromStaging(const BackupArchiveHeaderV1 &header, size_t offset, String &error) {
+  if (!removeAllHistoryFiles()) {
+    error = "alte Verlaufsdateien konnten nicht vollständig entfernt werden";
+    return false;
+  }
+  uint8_t buffer[512];
+  for (size_t i = 0; i < header.historyCount; ++i) {
+    BackupHistoryEntryV1 entry = {};
+    if (!readRestorePartition(offset, &entry, sizeof(entry))) {
+      error = "Verlaufsverzeichnis konnte nicht erneut gelesen werden";
+      return false;
+    }
+    offset += sizeof(entry);
+    const String path = String(ConfigDefaults::HISTORY_DIRECTORY) + "/" + entry.fileName;
+    File file = LittleFS.open(path, FILE_WRITE);
+    if (!file) {
+      error = "Verlaufsdatei " + String(entry.fileName) + " konnte nicht angelegt werden";
+      return false;
+    }
+    size_t copied = 0;
+    bool ok = true;
+    while (copied < entry.size) {
+      const size_t count = min(sizeof(buffer), static_cast<size_t>(entry.size) - copied);
+      if (!readRestorePartition(offset + copied, buffer, count) || file.write(buffer, count) != count) {
+        ok = false;
+        break;
+      }
+      copied += count;
+      delay(0);
+    }
+    file.flush();
+    file.close();
+    if (!ok) {
+      error = "Verlaufsdatei " + String(entry.fileName) + " konnte nicht vollständig geschrieben werden";
+      return false;
+    }
+    File verify = LittleFS.open(path, FILE_READ);
+    const uint32_t actualCrc = crc32File(verify);
+    if (verify) verify.close();
+    if (actualCrc != entry.crc) {
+      error = "Prüfung der wiederhergestellten Verlaufsdatei " + String(entry.fileName) + " fehlgeschlagen";
+      return false;
+    }
+    offset += entry.size;
+  }
+  return true;
+}
+
+bool applyStagedBackup(const BackupArchiveHeaderV1 &header, String &error) {
+  size_t offset = sizeof(header);
+  BackupConfigV1 *snapshot = static_cast<BackupConfigV1 *>(malloc(sizeof(BackupConfigV1)));
+  LoadProfileData *profile = static_cast<LoadProfileData *>(malloc(sizeof(LoadProfileData)));
+  if (snapshot == nullptr || profile == nullptr) {
+    free(snapshot); free(profile);
+    error = "nicht genügend Arbeitsspeicher zum Einspielen";
+    return false;
+  }
+  const bool readOk = readRestorePartition(offset, snapshot, sizeof(*snapshot));
+  offset += sizeof(*snapshot);
+  const bool profileRead = readRestorePartition(offset, profile, sizeof(*profile));
+  offset += sizeof(*profile);
+  if (!readOk || !profileRead) {
+    free(snapshot); free(profile);
+    error = "Konfiguration oder Lernprofil konnte nicht erneut gelesen werden";
+    return false;
+  }
+  applyBackupConfig(*snapshot);
+  saveConfig();
+  // Eine vor der Sicherung aktive Netzladung darf auf dem Zielgeraet niemals
+  // aus einem alten NVS-Restzustand wiederaufgenommen werden.
+  if (preferences.begin("sungrow", false)) {
+    preferences.putBool("tactive", false);
+    preferences.putUShort("temsmode", 0);
+    preferences.putUShort("temscmd", 0);
+    preferences.putUShort("tmaxold", 1000);
+    preferences.end();
+  }
+  loadProfile = *profile;
+  const bool profileSaved = saveStoredProfile();
+  free(snapshot); free(profile);
+  if (!profileSaved) {
+    error = "Lernprofil konnte nicht verifiziert gespeichert werden";
+    return false;
+  }
+  if (!restoreHistoryFromStaging(header, offset, error)) return false;
+  loadStoredHistory();
+  if (!historyStorageReady || !historyPersistenceOk) {
+    error = "Verlauf konnte nach dem Einspielen nicht verifiziert geladen werden";
+    return false;
+  }
+  return true;
+}
+
+void handleBackupRestoreUpload() {
+  HTTPUpload &upload = server.upload();
+  if (upload.status == UPLOAD_FILE_START) {
+    backupRestoreSuccess = false;
+    backupRestoreRejected = false;
+    backupRestoreMessage = "Sicherung wird empfangen";
+    backupRestoreBytes = 0;
+    backupRestoreCapacity = 0;
+    backupRestorePartition = esp_ota_get_next_update_partition(nullptr);
+    if (backupRestorePartition == nullptr) {
+      backupRestoreRejected = true;
+      backupRestoreMessage = "Kein unbenutzter Firmware-Slot zum sicheren Prüfen der Sicherung vorhanden.";
+      return;
+    }
+    if ((tariff.charging || tariff.recoveryPending)
+        && !stopTariffGridCharge("Wiederherstellung")) {
+      backupRestoreRejected = true;
+      backupRestoreMessage = "Wiederherstellung abgebrochen: Aktive Netzladung konnte nicht sicher beendet werden.";
+      return;
+    }
+    firmwareUpdateInProgress = true;
+    mqttPublisher.disconnect(true);
+    forceAllStagesOff(true);
+    modbusClient.stop();
+    pollingCycleActive = false;
+    const esp_partition_t *historyPartition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
+        ESP_PARTITION_SUBTYPE_ANY, ConfigDefaults::HISTORY_PARTITION_LABEL);
+    const size_t maximumArchive = sizeof(BackupArchiveHeaderV1) + sizeof(BackupConfigV1)
+        + sizeof(LoadProfileData) + BACKUP_MAX_HISTORY_FILES * sizeof(BackupHistoryEntryV1)
+        + (historyPartition == nullptr ? 0 : historyPartition->size) + 65536U;
+    backupRestoreCapacity = min(static_cast<size_t>(backupRestorePartition->size),
+        (maximumArchive + 4095U) & ~static_cast<size_t>(4095U));
+    if (backupRestoreCapacity == 0
+        || esp_partition_erase_range(backupRestorePartition, 0, backupRestoreCapacity) != ESP_OK) {
+      backupRestoreRejected = true;
+      firmwareUpdateInProgress = false;
+      backupRestoreMessage = "Prüfspeicher konnte nicht vorbereitet werden.";
+      return;
+    }
+    debugPrintf("Wiederherstellung gestartet: %s.\n", upload.filename.c_str());
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (backupRestoreRejected) return;
+    if (backupRestoreBytes > backupRestoreCapacity
+        || upload.currentSize > backupRestoreCapacity - backupRestoreBytes
+        || esp_partition_write(backupRestorePartition, backupRestoreBytes,
+                               upload.buf, upload.currentSize) != ESP_OK) {
+      backupRestoreRejected = true;
+      backupRestoreMessage = "Sicherungsdatei ist zu groß oder konnte nicht zwischengespeichert werden.";
+      return;
+    }
+    backupRestoreBytes += upload.currentSize;
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (backupRestoreRejected) return;
+    BackupArchiveHeaderV1 header = {};
+    String error;
+    if (!validateStagedBackup(header, error)) {
+      backupRestoreRejected = true;
+      backupRestoreMessage = "Wiederherstellung abgebrochen: " + error + ". Aktuelle Daten wurden nicht verändert.";
+      firmwareUpdateInProgress = false;
+      debugPrintln(backupRestoreMessage);
+      return;
+    }
+    if (!applyStagedBackup(header, error)) {
+      backupRestoreRejected = true;
+      backupRestoreMessage = "Wiederherstellung fehlgeschlagen: " + error
+          + ". Die Sicherungsdatei bleibt bis zum nächsten Firmware- oder Sicherungsupload im Prüfspeicher erhalten.";
+      firmwareUpdateInProgress = false;
+      debugPrintln(backupRestoreMessage);
+      return;
+    }
+    backupRestoreSuccess = true;
+    backupRestoreMessage = "Sicherung vollständig geprüft und wiederhergestellt. Der ESP32 startet neu.";
+    debugPrintf("Wiederherstellung abgeschlossen: %u Byte.\n", static_cast<unsigned int>(backupRestoreBytes));
+  } else if (upload.status == UPLOAD_FILE_ABORTED) {
+    backupRestoreRejected = true;
+    firmwareUpdateInProgress = false;
+    backupRestoreMessage = "Upload der Sicherung wurde abgebrochen. Aktuelle Daten wurden nicht verändert.";
+  }
+}
+
+void handleBackupRestoreFinished() {
+  addNoCacheHeaders();
+  if (backupRestoreSuccess) {
+    server.send(200, "text/plain; charset=utf-8", backupRestoreMessage);
+    restartAt = millis() + 1500;
+  } else {
+    if (backupRestoreMessage.isEmpty()) backupRestoreMessage = "Es wurde keine gültige Sicherungsdatei empfangen.";
+    server.send(400, "text/plain; charset=utf-8", backupRestoreMessage);
+    firmwareUpdateInProgress = false;
+  }
+}
+
 const char FIRMWARE_HTML[] PROGMEM = R"HTML(
 <!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Firmware · Solar Prognose Monitor</title><style>:root{--bg:#f3f5f7;--card:#fff;--text:#17212b;--muted:#64717d;--accent:#087f5b;--line:#dfe4e8;--bad:#b42318;--warn-bg:#fff7e0;--warn-line:#e9b949}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{background:#fff;border-bottom:1px solid var(--line)}.bar{max-width:1120px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}.nav{display:flex;gap:6px;overflow-x:auto}.nav a{white-space:nowrap;color:var(--text);text-decoration:none;padding:8px 10px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}main{max-width:820px;margin:22px auto;padding:0 18px}.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}.hint{color:var(--muted);line-height:1.55}.button{border:0;border-radius:9px;background:var(--accent);color:#fff;padding:11px 16px;font:inherit;font-weight:650;cursor:pointer}input[type=file]{display:block;width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;margin:12px 0}.override{display:flex;gap:10px;align-items:flex-start;padding:12px;margin:12px 0;border:1px solid var(--warn-line);border-radius:9px;background:var(--warn-bg);line-height:1.45}.override input{margin-top:3px}.override small{display:block;color:#765b00;margin-top:3px}progress{width:100%;height:18px;margin:12px 0}.bad{color:var(--bad)}@media(max-width:800px){.bar{align-items:flex-start;flex-wrap:wrap}.nav{width:100%}}.skip-link{position:fixed;left:12px;top:8px;z-index:20;transform:translateY(-150%);background:#fff;color:#17212b;padding:10px 14px;border:2px solid var(--accent);border-radius:8px}.skip-link:focus{transform:none}:focus-visible{outline:3px solid #005fcc;outline-offset:3px}.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}</style></head><body><a class="skip-link" href="#main">Zum Hauptinhalt springen</a><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav" aria-label="Hauptnavigation"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a href="/load-profile">Lastprofil</a><a href="/history">Verlauf</a><a href="/settings">Einstellungen</a><a class="active" aria-current="page" href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header><main id="main" tabindex="-1"><section class="card"><h2>Firmware über Browser installieren</h2><p class="hint">Wähle die kompilierte <b>.bin</b>-Datei für das verwendete ESP32-Modell, dessen Flashgröße und das bereits installierte Partitionsschema. Vor dem Update werden Lernprofil und LittleFS-Verlauf gespeichert und zurückgelesen. Schlägt diese Prüfung fehl, wird das Update standardmäßig abgebrochen. Vor dem Schreiben werden alle Ausgänge ausgeschaltet. Nach erfolgreicher Prüfung startet der ESP32 neu.</p><form id="form"><label for="file"><b>Firmwaredatei (.bin)</b></label><input id="file" type="file" accept=".bin,application/octet-stream" required><label class="override"><input id="forceUpdate" type="checkbox"><span><b>Notfallfreigabe: Update trotz fehlgeschlagener Sicherung zulassen</b><small>Nur verwenden, wenn ein Update sonst nicht mehr möglich ist. Lernprofil oder Verlauf können dabei verloren gehen.</small></span></label><button class="button">Firmware hochladen</button><label class="sr-only" for="progress">Upload-Fortschritt</label><progress id="progress" value="0" max="100">0 Prozent</progress><div id="result" role="status" aria-live="polite" aria-atomic="true"></div></form></section><section class="card"><h2>Hinweis zur Partitionierung</h2><p class="hint"><b>Die erstmalige Installation der mitgelieferten Partitionstabelle muss einmalig per USB erfolgen.</b> Stelle „Erase All Flash Before Sketch Upload“ auf <b>Disabled</b>, damit Einstellungen, Lernprofil und der bisherige 24-Stunden-Verlauf automatisch migriert werden können. Eine USB-Komplett-/Factory-Datei löscht diese Daten und ist nur für Neuinstallationen gedacht. Danach funktionieren Browserupdates wieder normal. Die 4-MB- und 8-MB-Dateien dürfen nicht vertauscht werden. ArduinoOTA ist nicht enthalten.</p></section></main><script>const form=document.querySelector('#form'),result=document.querySelector('#result'),progress=document.querySelector('#progress'),force=document.querySelector('#forceUpdate');form.addEventListener('submit',e=>{e.preventDefault();const warning=force.checked?'ACHTUNG: Das Update darf auch fortfahren, wenn Lernprofil oder Verlauf nicht sicher gespeichert werden konnten. Datenverlust ist möglich. Trotzdem installieren?':'Firmware jetzt installieren? Lernprofil und Verlauf werden vorher gespeichert und geprüft. Alle Ausgänge werden ausgeschaltet.';if(!confirm(warning))return;const xhr=new XMLHttpRequest();xhr.open('POST','/update?force='+(force.checked?'1':'0'));xhr.upload.onprogress=x=>{if(x.lengthComputable){progress.value=Math.round(x.loaded/x.total*100);progress.textContent=progress.value+' Prozent'}};xhr.onload=()=>{result.textContent=xhr.responseText;result.className=xhr.status===200?'':'bad'};xhr.onerror=()=>{result.textContent='Netzwerkfehler beim Upload.';result.className='bad'};const data=new FormData();data.append('firmware',document.querySelector('#file').files[0]);xhr.send(data)})</script></body></html>
 )HTML";
@@ -6607,6 +7616,9 @@ const char ABOUT_HTML[] PROGMEM = R"HTML(
 void handleFirmwarePage() {
   String page = FPSTR(FIRMWARE_HTML);
   injectMqttNavigation(page);
+  page.replace(
+      F("<h2>Firmware über Browser installieren</h2>"),
+      F("<h2>Firmware über Browser installieren</h2><p class=\"hint\"><b>Empfehlung:</b> Erstelle vor dem Update unter <a href=\"/system\">System</a> eine portable Komplettsicherung. Sie enthält zusätzlich zu Lernprofil und Verlauf auch alle Einstellungen.</p>"));
   page.replace(
       F("Stelle „Erase All Flash Before Sketch Upload“ auf <b>Disabled</b>, damit Einstellungen, Lernprofil und der bisherige 24-Stunden-Verlauf automatisch migriert werden können. Eine USB-Komplett-/Factory-Datei löscht diese Daten und ist nur für Neuinstallationen gedacht."),
       F("Für eine Neuinstallation auf einem frischen ESP32 ist Version 1.0.1 oder neuer erforderlich; Version 1.0.0 konnte dort wegen eines falschen App-Offsets nicht starten. Eine USB-Komplett-/Factory-Datei ist nur für Neuinstallationen gedacht und löscht vorhandene Daten. Bereits laufende Geräte erhalten die passende normale Update-Datei über diese Seite."));
@@ -6851,6 +7863,7 @@ void startWebServer() {
   server.on("/load-profile", HTTP_GET, handleLoadProfilePage);
   server.on("/history", HTTP_GET, handleHistoryPage);
   server.on("/mqtt", HTTP_GET, handleMqttPage);
+  server.on("/system", HTTP_GET, handleSystemPage);
   server.on("/settings", HTTP_GET, handleSettings);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/firmware", HTTP_GET, handleFirmwarePage);
@@ -6866,6 +7879,11 @@ void startWebServer() {
   server.on("/api/mqtt", HTTP_GET, handleMqttApi);
   server.on("/api/mqtt/publish", HTTP_POST, handleMqttPublishNow);
   server.on("/metrics", HTTP_GET, handlePrometheusMetrics);
+  server.on("/api/system", HTTP_GET, handleSystemApi);
+  server.on("/api/system/modbus-test", HTTP_POST, handleSystemModbusTest);
+  server.on("/api/support-report", HTTP_GET, handleSupportReport);
+  server.on("/api/backup/download", HTTP_GET, handleBackupDownload);
+  server.on("/api/backup/restore", HTTP_POST, handleBackupRestoreFinished, handleBackupRestoreUpload);
   server.on("/api/pushover/test", HTTP_POST, handlePushoverTest);
   server.on("/api/version-check", HTTP_POST, handleVersionCheck);
   server.on("/about", HTTP_GET, handleAboutPage);
