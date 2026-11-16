@@ -1,6 +1,6 @@
 # Prometheus- und Grafana-Anbindung
 
-Stand: Firmware **1.7.0**
+Stand: Firmware **1.8.0**
 
 Der Solar Prognose Monitor stellt aktuelle Anlagen- und Gerätemesswerte unter
 folgendem HTTP-Endpunkt im Prometheus-Textformat bereit:

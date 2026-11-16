@@ -16,7 +16,7 @@ Der Hausverbrauch wird für jeden Wochentag in 15-Minuten-Blöcken gelernt. Wied
 
 Die Steuerung gibt den zulässigen Ladezielwert schrittweise frei. Bei einer unerwarteten Wolkenphase wartet sie nicht auf eine verpasste Zwischenstufe, sondern wechselt auf den zur aktuellen Uhrzeit vorgesehenen Wert. Zusätzlich prüft sie, welcher Batteriestand mindestens freigegeben werden muss, damit das Tagesziel mit der noch erwarteten Energie erreichbar bleibt. Nächtliche Absenkungen der Ladeobergrenze werden nur intern nachgeführt und kurz vor der nächsten PV-Produktion zu einem einzigen Schreibzugriff zusammengefasst. Sicherheitsreserve, gewünschtes Ladeende und Schrittweite lassen sich einstellen. Da Wetter- und Verbrauchsprognosen nie vollkommen exakt sind, ersetzt das System keine Anlagenüberwachung und sollte bei der ersten Inbetriebnahme kontrolliert werden.
 
-Aktuelle Version: **1.7.0**
+Aktuelle Version: **1.8.0**
 
 **Hardwarestand:** Die aktuelle Firmware ist für ein klassisches **ESP32 DevKit mit ESP32-WROOM-Modul** ausgelegt. Weitere ESP32-Varianten wie der **ESP32-C3** werden derzeit getestet; Pinbelegung, Partitionierung und Programmcode werden dafür schrittweise angepasst. Bis eine Variante ausdrücklich als unterstützt gekennzeichnet ist, sollte dafür nicht ungeprüft die DevKit-Firmware verwendet werden.
 
@@ -34,6 +34,7 @@ Aktuelle Version: **1.7.0**
 - wahlweise drei oder vier frei belegbare Eingänge für einen Rundsteuerempfänger mit automatischer Einspeisebegrenzung
 - 3-Kontakt-Modus mit 100 % bei ruhenden Eingängen oder 4-Kontakt-Modus mit eigenem 100-%-Signal
 - aktiver HIGH- oder LOW-Pegel für jeden Rundsteuer-Eingang separat auswählbar
+- wahlweise ausgeschaltete, manuell in Prozent vorgegebene oder über Rundsteuerkontakte geführte Einspeisebegrenzung
 - Browser-Firmwareupdate mit verifizierter Sicherung von Lernprofil und Verlauf; bewusst bestätigbare Notfallfreigabe bei Speicherproblemen
 - About-Seite mit Firmware-Version, Hersteller, Lizenzstatus und Flashgröße; Web-Debug ist dort integriert
 - einzeln auswählbare Pushover-Meldungen bei ESP32-Start, Modbus-Ausfall, Netzausfall/Inselbetrieb und Wiederherstellung, täglicher Sonnenuntergangsbericht und neue GitHub-Firmwareversion
@@ -42,7 +43,8 @@ Aktuelle Version: **1.7.0**
 - eigene Partitionstabellen für 4 MB und 8 MB: bestehende 20-KB-System-NVS, zusätzliche 64-KB-Profil-NVS, zwei große OTA-Slots und eine separate LittleFS-Verlaufspartition
 - optionale Smart-Meter-Zählerstände 5746 und 5748: nicht unterstützte Register beeinträchtigen die übrige Modbus-Abfrage nicht
 - Datum und Uhrzeit an allen Verlaufsgrafiken sowie Jetzt-/Zielmarken im Ladefahrplan
-- Tab **Verlauf** mit dauerhaftem 31-Tage-Speicher: Tagesansicht in 5-, Wochenansicht in 15- und Monatsansicht in 60-Minuten-Auflösung
+- Tab **Energie & Verlauf** mit dauerhaftem 31-Tage-Speicher: Tagesansicht in 5-, Wochenansicht in 15- und Monatsansicht in 60-Minuten-Auflösung
+- Energieauswertung mit PV-Erzeugung, Hausverbrauch, Netzbezug, Einspeisung, Batterie-Lade-/Entladeenergie, Autarkie, Eigenverbrauch, SOC-Bereich, Spitzenwerten, Datenabdeckung, Tagesberichten und CSV-Export
 - ausschließlich sendende MQTT-3.1.1-Datenweitergabe an Home Assistant, ioBroker, Node-RED oder Telegraf/InfluxDB; ohne externe Steuer- oder Modbus-Schreibbefehle
 - eigener Tab **Daten**, retained Verfügbarkeits-/Messwerttopics, verständliche Metriknamen, vollständige Registertopics und optionale Home-Assistant-Discovery
 - ausschließlich lesender Prometheus-Endpunkt unter `/metrics`; Grafana kann die Messwerte über eine Prometheus-Datenquelle visualisieren
@@ -74,7 +76,7 @@ Die Funktion ist keine Arbitrage- oder Gewinnzusage. Preis-APIs, Wechselrichter-
 
 Die Auswertung kann an zwei Empfängerarten angepasst werden. Im **3-Kontakt-Modus** müssen genau drei Eingänge aktiv sein; liegt kein Signal an, gilt dies als 100 %. Im **4-Kontakt-Modus** müssen genau vier Eingänge aktiv sein und einer davon muss ausdrücklich 100 % melden. Ohne Signal bleibt in diesem Modus die letzte Wechselrichtereinstellung unverändert. Sind mehrere Kontakte aktiv, gilt nach zwei Sekunden Entprellzeit der niedrigste Prozentwert.
 
-Aus der aktiven Kontaktstufe und der installierten PV-Leistung ermittelt der ESP32 automatisch die zulässige Einspeiseleistung und überträgt sie geprüft an den Wechselrichter. Die genaue Berechnung, verwendeten Register und Sicherheitslogik stehen in der [vollständigen Bedienungsanleitung](docs/Vollstaendige-Bedienungsanleitung.md).
+Die Einspeisebegrenzung besitzt drei gegenseitig ausschließende Betriebsarten: **Aus**, **Manuell** und **Rundsteuerempfänger**. Im manuellen Betrieb lässt sich beispielsweise dauerhaft 60 % vorgeben. Im Rundsteuerbetrieb stammt der Prozentwert von den Kontakten. Aus dem jeweiligen Prozentwert und der Summe aller aktivierten Dachflächen ermittelt der ESP32 die zulässige Einspeiseleistung und überträgt sie geprüft an den Wechselrichter. Die genaue Berechnung, verwendeten Register und Sicherheitslogik stehen in der [vollständigen Bedienungsanleitung](docs/Vollstaendige-Bedienungsanleitung.md).
 
 ## Pushover-Benachrichtigungen
 
@@ -117,10 +119,10 @@ Der Sketch verwendet ausschließlich Bibliotheken aus dem ESP32-Core.
 Für einen reproduzierbaren Build beider Varianten im Projektordner ausführen:
 
 ```powershell
-.\scripts\build-release.ps1 -Version 1.7.0
+.\scripts\build-release.ps1 -Version 1.8.0
 ```
 
-Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.7.0`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
+Das Skript setzt die maximal zulässige App-Größe passend zu den eigenen Partitionstabellen und erzeugt getrennte Update- sowie vollständige USB-Dateien unter `dist/v1.8.0`. Wer direkt in der Arduino IDE baut, wählt **Partition Scheme: Custom** und verwendet für 4 MB die mitgelieferte `partitions.csv`. Für 8 MB muss vor dem Kompilieren deren Inhalt durch `partitions_8MB.csv` ersetzt werden. Die Flashgröße muss immer zum real verbauten Modul passen. Die IDE zeigt beim Custom-Schema eine großzügige allgemeine Obergrenze an; maßgeblich sind dennoch 1.835.008 Byte bei 4 MB und 3.670.016 Byte bei 8 MB.
 
 ### Erstinstallation der Partitionstabelle
 

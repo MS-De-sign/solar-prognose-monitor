@@ -65,7 +65,7 @@
 */
 
 namespace ConfigDefaults {
-constexpr char FIRMWARE_VERSION[] = "1.7.0";
+constexpr char FIRMWARE_VERSION[] = "1.8.0";
 constexpr char MANUFACTURER[] = "MS-De-sign / Marcus Sonntag";
 constexpr char LICENSE_TEXT[] = "PolyForm Noncommercial License 1.0.0";
 constexpr char PROJECT_URL[] = "https://github.com/MS-De-sign/solar-prognose-monitor";
@@ -628,6 +628,8 @@ struct AppConfig {
   PvArrayConfig pvArrays[PV_ARRAY_COUNT];
   bool rippleEnabled;
   uint8_t rippleSignalMode;
+  bool manualExportLimitEnabled;
+  uint8_t manualExportLimitPercent;
   RippleInputConfig rippleInputs[RIPPLE_INPUT_COUNT];
   bool pushoverEnabled;
   String pushoverAppToken;
@@ -836,6 +838,43 @@ struct __attribute__((packed)) HistoryFileHeader {
   uint16_t sampleSize;
   uint32_t crc;
 };
+
+struct HistoryEnergyStats {
+  int64_t pvWattSeconds;
+  int64_t loadWattSeconds;
+  int64_t exportWattSeconds;
+  int64_t importWattSeconds;
+  int64_t batteryChargeWattSeconds;
+  int64_t batteryDischargeWattSeconds;
+  uint32_t samples;
+  uint32_t pvSamples;
+  uint32_t loadSamples;
+  uint32_t gridSamples;
+  uint32_t batterySamples;
+  uint32_t socSamples;
+  uint32_t expectedSamples;
+  uint32_t firstSocEpoch;
+  uint32_t lastSocEpoch;
+  uint16_t firstSocTenths;
+  uint16_t lastSocTenths;
+  uint16_t minimumSocTenths;
+  uint16_t maximumSocTenths;
+  int32_t peakPvWatts;
+  int32_t peakLoadWatts;
+  int32_t peakExportWatts;
+  int32_t peakImportWatts;
+};
+
+struct HistoryDailyReport {
+  uint32_t dateKey;
+  char date[11];
+  HistoryEnergyStats stats;
+};
+
+constexpr size_t HISTORY_REPORT_DAY_COUNT = 32;
+HistoryEnergyStats historyReportTotal = {};
+HistoryDailyReport historyReportDays[HISTORY_REPORT_DAY_COUNT] = {};
+size_t historyReportDayCount = 0;
 
 // Das portable Sicherungsformat ist absichtlich unabhaengig vom rohen NVS-
 // Layout. Dadurch kann eine Sicherung auch auf einem Ersatzgeraet sowie
@@ -1895,6 +1934,8 @@ void setDefaultForecastConfig() {
   }
   config.rippleEnabled = false;
   config.rippleSignalMode = 4;
+  config.manualExportLimitEnabled = false;
+  config.manualExportLimitPercent = 60;
   const uint8_t defaultPins[RIPPLE_INPUT_COUNT] = {25, 26, 32, 33};
   const uint8_t defaultPercents[RIPPLE_INPUT_COUNT] = {100, 60, 30, 0};
   for (size_t i = 0; i < RIPPLE_INPUT_COUNT; ++i) {
@@ -2131,6 +2172,10 @@ void loadConfig() {
   forecastRestorePending = preferences.getBool("fcrestore", false);
   config.rippleEnabled = preferences.getBool("rcen", config.rippleEnabled);
   config.rippleSignalMode = preferences.getUChar("rcmode", config.rippleSignalMode);
+  config.manualExportLimitEnabled = preferences.getBool("rcmanual", config.manualExportLimitEnabled);
+  config.manualExportLimitPercent = preferences.getUChar("rcmanpct", config.manualExportLimitPercent);
+  config.manualExportLimitPercent = constrain(config.manualExportLimitPercent, 0, 100);
+  if (config.manualExportLimitEnabled) config.rippleEnabled = false;
   const bool legacyActiveLow = preferences.getBool("rclow", true);
   rippleReleasePending = preferences.getBool("rcrelease", false);
   for (size_t i = 0; i < RIPPLE_INPUT_COUNT; ++i) {
@@ -2311,6 +2356,8 @@ void saveConfig() {
   preferences.putBool("fcrestore", forecastRestorePending);
   preferences.putBool("rcen", config.rippleEnabled);
   preferences.putUChar("rcmode", config.rippleSignalMode);
+  preferences.putBool("rcmanual", config.manualExportLimitEnabled);
+  preferences.putUChar("rcmanpct", config.manualExportLimitPercent);
   preferences.putBool("rcrelease", rippleReleasePending);
   for (size_t i = 0; i < RIPPLE_INPUT_COUNT; ++i) {
     const String prefix = "rc" + String(i + 1);
@@ -2980,8 +3027,9 @@ void persistRippleReleasePending(bool pending) {
 void serviceRippleControl() {
   if (pollingCycleActive) return;
   const uint32_t now = millis();
+  const bool exportLimitActive = config.manualExportLimitEnabled || config.rippleEnabled;
 
-  if (!config.rippleEnabled) {
+  if (!exportLimitActive) {
     rippleSelectedPercent = 255;
     if (rippleReleasePending && timeReached(nextRippleActionAt)) {
       nextRippleActionAt = now + ConfigDefaults::RIPPLE_RETRY_MS;
@@ -2991,23 +3039,31 @@ void serviceRippleControl() {
         holdingExportLimitValid = true;
         holdingExportLimitUpdatedAt = now;
         persistRippleReleasePending(false);
-        rippleStatus = "Rundsteuerung ausgeschaltet; Limitierung einmalig deaktiviert und geprüft";
+        rippleStatus = "Einspeisebegrenzung ausgeschaltet; Limitierung einmalig deaktiviert und geprüft";
         debugPrintln(rippleStatus);
       } else {
-        rippleStatus = "Rundsteuerung: Deaktivierung fehlgeschlagen – " + lastTransactionError;
+        rippleStatus = "Einspeisebegrenzung: Deaktivierung fehlgeschlagen – " + lastTransactionError;
       }
       return;
     }
-    if (!rippleReleasePending) rippleStatus = "Rundsteuerung deaktiviert";
+    if (!rippleReleasePending) rippleStatus = "Einspeisebegrenzung deaktiviert";
   } else {
-    const uint8_t candidate = activeRipplePercent();
-    if (candidate != rippleCandidatePercent) {
-      rippleCandidatePercent = candidate;
-      rippleCandidateSince = now;
-    }
-    if (candidate != rippleSelectedPercent && now - rippleCandidateSince >= ConfigDefaults::RIPPLE_DEBOUNCE_MS) {
-      rippleSelectedPercent = candidate;
-      nextRippleActionAt = now;
+    if (config.manualExportLimitEnabled) {
+      if (rippleSelectedPercent != config.manualExportLimitPercent) {
+        rippleSelectedPercent = config.manualExportLimitPercent;
+        nextRippleActionAt = now;
+      }
+    } else {
+      const uint8_t candidate = activeRipplePercent();
+      if (candidate != rippleCandidatePercent) {
+        rippleCandidatePercent = candidate;
+        rippleCandidateSince = now;
+      }
+      if (candidate != rippleSelectedPercent
+          && now - rippleCandidateSince >= ConfigDefaults::RIPPLE_DEBOUNCE_MS) {
+        rippleSelectedPercent = candidate;
+        nextRippleActionAt = now;
+      }
     }
 
     if (rippleSelectedPercent == 255) {
@@ -3015,14 +3071,17 @@ void serviceRippleControl() {
     } else if (timeReached(nextRippleActionAt)) {
       nextRippleActionAt = now + ConfigDefaults::RIPPLE_RETRY_MS;
       const uint32_t installedWatts = configuredPvPeakWatts();
-      if (installedWatts == 0 || installedWatts > UINT16_MAX) {
+      const uint64_t calculatedWatts =
+          (static_cast<uint64_t>(installedWatts) * rippleSelectedPercent + 50ULL) / 100ULL;
+      const String modeName = config.manualExportLimitEnabled ? "Manuelle Einspeisebegrenzung" : "Rundsteuerung";
+      if (installedWatts == 0 || calculatedWatts > UINT16_MAX) {
         rippleStatus = installedWatts == 0
-            ? "Rundsteuerung: keine aktive Dachleistung konfiguriert"
-            : "Rundsteuerung: installierte Leistung übersteigt die 65.535-W-Registergrenze";
+            ? modeName + ": keine installierte PV-Leistung konfiguriert"
+            : modeName + ": berechneter Grenzwert übersteigt die 65.535-W-Registergrenze";
         return;
       }
-      const uint16_t targetWatts = static_cast<uint16_t>((installedWatts * rippleSelectedPercent + 50U) / 100U);
-      bool currentValuesOk = readExportLimitHoldingValues();
+      const uint16_t targetWatts = static_cast<uint16_t>(calculatedWatts);
+      const bool currentValuesOk = readExportLimitHoldingValues();
       if (!currentValuesOk
           || holdingExportLimitWatts != targetWatts
           || holdingExportLimitEnabledRaw != ConfigDefaults::EXPORT_LIMIT_ENABLED_RAW) {
@@ -3030,17 +3089,17 @@ void serviceRippleControl() {
             || !writeAndVerifyHolding(ConfigDefaults::EXPORT_LIMIT_ENABLE_HOLDING_ADDRESS,
                                       ConfigDefaults::EXPORT_LIMIT_ENABLED_RAW)) {
           holdingExportLimitValid = false;
-          rippleStatus = "Rundsteuerung: Schreiben fehlgeschlagen – " + lastTransactionError;
+          rippleStatus = modeName + ": Schreiben fehlgeschlagen – " + lastTransactionError;
           return;
         }
         holdingExportLimitWatts = targetWatts;
         holdingExportLimitEnabledRaw = ConfigDefaults::EXPORT_LIMIT_ENABLED_RAW;
         holdingExportLimitValid = true;
         holdingExportLimitUpdatedAt = now;
-        debugPrintf("Rundsteuerung: %u %% -> %u W; Adressen 13073/13086 geschrieben und geprüft.\n",
-                    rippleSelectedPercent, targetWatts);
+        debugPrintf("%s: %u %% -> %u W; Adressen 13073/13086 geschrieben und geprüft.\n",
+                    modeName.c_str(), rippleSelectedPercent, targetWatts);
       }
-      rippleStatus = "Rundsteuerung aktiv: " + String(rippleSelectedPercent) + " % = "
+      rippleStatus = modeName + " aktiv: " + String(rippleSelectedPercent) + " % = "
                    + String(targetWatts) + " W";
       nextRippleReadAt = now + ConfigDefaults::RIPPLE_READ_INTERVAL_MS;
       return;
@@ -6036,7 +6095,7 @@ void injectMainNavigation(String &page) {
   };
   static const char *const labels[] = {
     "Wechselrichter", "Batterie", "Prognose", "Stromtarif", "Lastprofil",
-    "Verlauf", "Daten", "Einstellungen", "System", "Firmware", "About"
+    "Energie & Verlauf", "Daten", "Einstellungen", "System", "Firmware", "About"
   };
   static_assert(sizeof(paths) / sizeof(paths[0]) == sizeof(labels) / sizeof(labels[0]),
                 "Navigation benötigt gleich viele Pfade und Beschriftungen.");
@@ -6237,13 +6296,21 @@ void handleSettings() {
     roof += F("'><p class='hint'>Open-Meteo: 0° Süd, −90° Ost, +90° West, ±180° Nord.</p></label></div></div></details>");
     sendChunk(roof);
   }
-  part = F("</section><section class='card'><h2>Rundsteuerempfänger</h2><div class='grid'><label class='check full'><input type='checkbox' name='rcen' value='1'");
+  part = F("</section><section class='card'><h2>Einspeisebegrenzung</h2><div class='grid'><label>Betriebsart<select id='exportMode' name='exportMode' onchange='this.form.elements.rcen.checked=this.value==2'><option value='0'");
+  if (!config.manualExportLimitEnabled && !config.rippleEnabled) part += F(" selected");
+  part += F(">Aus</option><option value='1'");
+  if (config.manualExportLimitEnabled) part += F(" selected");
+  part += F(">Manuell</option><option value='2'");
+  if (config.rippleEnabled) part += F(" selected");
+  part += F(">Rundsteuerempfänger</option></select><input type='checkbox' name='rcen' value='1' hidden");
   if (config.rippleEnabled) part += F(" checked");
-  part += F("> Einspeisebegrenzung über Rundsteuerempfänger aktivieren</label><div class='full'><label for='rcmode'>Signalart</label><select id='rcmode' name='rcmode'><option value='3'");
+  part += F("></label><label>Manuelle Begrenzung (%)<input name='manualExportPercent' type='number' min='0' max='100' step='1' value='");
+  part += String(config.manualExportLimitPercent);
+  part += F("'><p class='hint'>Wirkt nur in der Betriebsart Manuell. Beispiel: 60 % einer eingetragenen PV-Leistung von 10 kWp ergeben 6.000 W.</p></label><div class='full'><label for='rcmode'>Signalart des Rundsteuerempfängers</label><select id='rcmode' name='rcmode'><option value='3'");
   if (config.rippleSignalMode == 3) part += F(" selected");
   part += F(">3 Kontakte – kein Signal bedeutet 100 %</option><option value='4'");
   if (config.rippleSignalMode == 4) part += F(" selected");
-  part += F(">4 Kontakte – auch 100 % hat ein eigenes Signal</option></select></div><p class='hint full'>Im 3-Kontakt-Betrieb müssen drei Eingänge verwendet werden; die Ruhestellung ohne Signal wird als 100 % ausgewertet. Im 4-Kontakt-Betrieb wird 100 % wie jede andere Stufe durch einen Eingang gemeldet; ohne aktiven Eingang bleibt die letzte Wechselrichtereinstellung unverändert. Die installierte Leistung ist die Summe aller oben aktivierten Dachflächen. 13073 erhält Leistung × Prozent direkt in Watt, 13086 aktiviert die Begrenzung mit 0xAA. Sind mehrere Eingänge aktiv, gilt der niedrigste Prozentwert. Der aktive HIGH-/LOW-Pegel wird je Eingang festgelegt.</p></div>");
+  part += F(">4 Kontakte – auch 100 % hat ein eigenes Signal</option></select></div><p class='hint full'>Es kann immer nur eine Betriebsart aktiv sein. Manuell hält den eingestellten Prozentwert. Im 3-Kontakt-Betrieb müssen drei Eingänge verwendet werden; die Ruhestellung ohne Signal wird als 100 % ausgewertet. Im 4-Kontakt-Betrieb wird 100 % wie jede andere Stufe durch einen Eingang gemeldet; ohne aktiven Eingang bleibt die letzte Wechselrichtereinstellung unverändert. Grundlage ist jeweils die Summe der installierten Leistung aller aktivierten Dachflächen. Register 13073 erhält Leistung × Prozent direkt in Watt, Register 13086 aktiviert die Begrenzung mit 0xAA. Sind mehrere Eingänge aktiv, gilt der niedrigste Prozentwert. Der aktive HIGH-/LOW-Pegel wird je Eingang festgelegt.</p></div>");
   sendChunk(part);
   for (size_t i = 0; i < RIPPLE_INPUT_COUNT; ++i) {
     const RippleInputConfig &input = config.rippleInputs[i];
@@ -6453,7 +6520,7 @@ float boundedFloatArgument(const String &name, float fallback, float minimum, fl
 
 void handleSave() {
   const bool bypassWasActive = config.forecastEnabled && config.forecastBypass;
-  const bool rippleWasEnabled = config.rippleEnabled;
+  const bool exportLimitWasActive = config.rippleEnabled || config.manualExportLimitEnabled;
   const bool updateNotificationWasEnabled = config.pushoverNotifyUpdate;
   const bool mqttDiscoveryWasEnabled = config.mqttHomeAssistantDiscovery;
   const String previousMqttDiscoveryPrefix = config.mqttDiscoveryPrefix;
@@ -6610,7 +6677,11 @@ void handleSave() {
     array.azimuthDegrees = static_cast<int16_t>(azimuth);
   }
 
-  config.rippleEnabled = server.hasArg("rcen");
+  const uint8_t exportMode = static_cast<uint8_t>(boundedNumberArgument("exportMode", 0, 0, 2));
+  config.manualExportLimitEnabled = exportMode == 1;
+  config.rippleEnabled = exportMode == 2;
+  config.manualExportLimitPercent = static_cast<uint8_t>(boundedNumberArgument(
+      "manualExportPercent", config.manualExportLimitPercent, 0, 100));
   config.rippleSignalMode = static_cast<uint8_t>(boundedNumberArgument("rcmode", 4, 3, 4));
   for (size_t i = 0; i < RIPPLE_INPUT_COUNT; ++i) {
     const String prefix = "rc" + String(i + 1);
@@ -6640,9 +6711,10 @@ void handleSave() {
   sanitizeSurplusConfig();
   sanitizeForecastConfig();
   sanitizeRippleConfig();
-  if (rippleWasEnabled && !config.rippleEnabled) {
+  const bool exportLimitIsActive = config.rippleEnabled || config.manualExportLimitEnabled;
+  if (exportLimitWasActive && !exportLimitIsActive) {
     rippleReleasePending = true;
-  } else if (config.rippleEnabled) {
+  } else if (exportLimitIsActive) {
     rippleReleasePending = false;
   }
   const bool bypassIsActive = config.forecastEnabled && config.forecastBypass;
@@ -6865,26 +6937,26 @@ let data=null;const fmt=n=>Math.round(Number(n)||0);const draw=()=>{if(!data)ret
 
 const char HISTORY_HTML[] PROGMEM = R"HTML(
 <!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Verlauf · Solar Prognose Monitor</title><style>
-:root{--bg:#f3f5f7;--card:#fff;--text:#17212b;--muted:#64717d;--accent:#087f5b;--line:#dfe4e8;--bad:#b42318}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}
-header{background:#fff;border-bottom:1px solid var(--line)}.bar{max-width:1180px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}.nav{display:flex;gap:6px;overflow-x:auto}.nav a{white-space:nowrap;color:var(--text);text-decoration:none;padding:8px 10px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}
-main{max-width:1180px;margin:22px auto;padding:0 18px}.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}.tools,.legend{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.legend label{display:flex;gap:6px;align-items:center}.dot{width:11px;height:11px;border-radius:50%;display:inline-block}.muted{color:var(--muted)}select{padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit}.metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin:16px 0}.metric{padding:12px;border:1px solid var(--line);border-radius:10px}.metric span{display:block;color:var(--muted);font-size:12px}.metric b{display:block;font-size:19px;margin-top:4px}canvas{display:block;width:100%;height:410px}.empty{padding:60px 10px;text-align:center;color:var(--muted)}
-@media(max-width:900px){.metrics{grid-template-columns:repeat(3,1fr)}.bar{align-items:flex-start;flex-wrap:wrap}.nav{width:100%}}@media(max-width:520px){.metrics{grid-template-columns:repeat(2,1fr)}canvas{height:350px}}
-.skip-link{position:fixed;left:12px;top:8px;z-index:20;transform:translateY(-150%);background:#fff;color:#17212b;padding:10px 14px;border:2px solid var(--accent);border-radius:8px}.skip-link:focus{transform:none}:focus-visible{outline:3px solid #005fcc;outline-offset:3px}.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}</style></head><body><a class="skip-link" href="#main">Zum Hauptinhalt springen</a><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav" aria-label="Hauptnavigation"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a href="/load-profile">Lastprofil</a><a class="active" aria-current="page" href="/history">Verlauf</a><a href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header>
-<main id="main" tabindex="-1"><section class="card"><div class="tools"><label for="range">Zeitraum</label><select id="range"><option value="24" selected>Tag · letzte 24 Stunden</option><option value="168">Woche · letzte 7 Tage</option><option value="744">Monat · letzte 31 Tage</option></select><span id="status" class="muted" role="status" aria-live="polite" aria-atomic="true">Verlauf wird geladen …</span></div><div class="metrics" id="metrics"></div><div class="legend">
-<label><input type="checkbox" data-key="pv" checked><i class="dot" style="background:#18a66a"></i>PV</label>
-<label><input type="checkbox" data-key="load" checked><i class="dot" style="background:#d9a400"></i>Verbrauch</label>
-<label><input type="checkbox" data-key="export" checked><i class="dot" style="background:#d63b8c"></i>Einspeisung</label>
-<label><input type="checkbox" data-key="import" checked><i class="dot" style="background:#d04a3a"></i>Netzbezug</label>
-<label><input type="checkbox" data-key="battery" checked><i class="dot" style="background:#2673c9"></i>Batterieleistung</label>
-<label><input type="checkbox" data-key="soc" checked><i class="dot" style="background:#087f5b"></i>Batterie-SOC</label>
-</div></section><section class="card"><canvas id="chart" role="img" aria-describedby="historySummary"></canvas><p id="historySummary" class="sr-only">Verlauf wird geladen.</p><div id="empty" class="empty" hidden>Noch keine Messpunkte vorhanden. Der erste Punkt wird nach einer erfolgreichen Modbus-Abfrage angelegt.</div></section></main>
+<title>Energie & Verlauf · Solar Prognose Monitor</title><style>
+:root{--bg:#f3f5f7;--card:#fff;--text:#17212b;--muted:#64717d;--accent:#087f5b;--line:#dfe4e8;--bad:#b42318;--warn:#8a6100}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}header{background:#fff;border-bottom:1px solid var(--line)}.bar{max-width:1180px;margin:auto;padding:14px 18px;display:flex;align-items:center;gap:18px}h1{font-size:20px;margin:0 auto 0 0}h2{font-size:18px;margin:0 0 13px}.nav{display:flex;gap:6px;overflow-x:auto}.nav a{white-space:nowrap;color:var(--text);text-decoration:none;padding:8px 10px;border-radius:8px}.nav a.active,.nav a:hover{background:#e6f4ef;color:#056044}main{max-width:1180px;margin:22px auto;padding:0 18px}.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}.tools,.legend{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.legend label{display:flex;gap:6px;align-items:center}.dot{width:11px;height:11px;border-radius:50%;display:inline-block}.muted{color:var(--muted)}.warn{color:var(--warn)}select,.button{padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit}.button{border:0;background:var(--accent);color:#fff;font-weight:650;cursor:pointer}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0}.metrics.six{grid-template-columns:repeat(6,1fr)}.metric{padding:12px;border:1px solid var(--line);border-radius:10px}.metric span{display:block;color:var(--muted);font-size:12px}.metric b{display:block;font-size:19px;margin-top:4px}.hint{color:var(--muted);line-height:1.5}canvas{display:block;width:100%;height:410px}.empty{padding:60px 10px;text-align:center;color:var(--muted)}.scroll{overflow:auto}table{width:100%;border-collapse:collapse}th,td{text-align:right;padding:8px;border-bottom:1px solid var(--line);white-space:nowrap}th:first-child,td:first-child{text-align:left}tfoot{font-weight:700;background:#f7f9fa}
+@media(max-width:900px){.metrics,.metrics.six{grid-template-columns:repeat(3,1fr)}.bar{align-items:flex-start;flex-wrap:wrap}.nav{width:100%}}@media(max-width:520px){.metrics,.metrics.six{grid-template-columns:repeat(2,1fr)}canvas{height:350px}}
+.skip-link{position:fixed;left:12px;top:8px;z-index:20;transform:translateY(-150%);background:#fff;color:#17212b;padding:10px 14px;border:2px solid var(--accent);border-radius:8px}.skip-link:focus{transform:none}:focus-visible{outline:3px solid #005fcc;outline-offset:3px}.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}</style></head>
+<body><a class="skip-link" href="#main">Zum Hauptinhalt springen</a><header><div class="bar"><h1>Solar Prognose Monitor</h1><nav class="nav" aria-label="Hauptnavigation"><a href="/inverter">Wechselrichter</a><a href="/battery">Batterie</a><a href="/forecast">Prognose</a><a href="/load-profile">Lastprofil</a><a class="active" aria-current="page" href="/history">Energie & Verlauf</a><a href="/settings">Einstellungen</a><a href="/firmware">Firmware</a><a href="/about">About</a></nav></div></header>
+<main id="main" tabindex="-1"><section class="card"><div class="tools"><label for="range">Zeitraum</label><select id="range"><option value="24" selected>Tag · letzte 24 Stunden</option><option value="168">Woche · letzte 7 Tage</option><option value="744">Monat · letzte 31 Tage</option></select><button id="csv" class="button" type="button">Bericht als CSV</button><span id="status" class="muted" role="status" aria-live="polite" aria-atomic="true">Auswertung wird geladen …</span></div></section>
+<section class="card"><h2>Energieauswertung</h2><div class="metrics" id="energyMetrics"></div><div class="metrics" id="qualityMetrics"></div><p id="coverageHint" class="hint"></p><p class="hint">Die Energiewerte werden aus den gespeicherten Fünf-Minuten-Leistungsmessungen berechnet und sind eine technische Auswertung, kein geeichter Abrechnungszähler. Fehlende Messzeiten werden nicht als null gewertet, sondern über die Datenabdeckung sichtbar gemacht.</p></section>
+<section class="card"><h2>Leistungsverlauf</h2><div class="metrics six" id="liveMetrics"></div><div class="legend"><label><input type="checkbox" data-key="pv" checked><i class="dot" style="background:#18a66a"></i>PV</label><label><input type="checkbox" data-key="load" checked><i class="dot" style="background:#d9a400"></i>Verbrauch</label><label><input type="checkbox" data-key="export" checked><i class="dot" style="background:#d63b8c"></i>Einspeisung</label><label><input type="checkbox" data-key="import" checked><i class="dot" style="background:#d04a3a"></i>Netzbezug</label><label><input type="checkbox" data-key="battery" checked><i class="dot" style="background:#2673c9"></i>Batterieleistung</label><label><input type="checkbox" data-key="soc" checked><i class="dot" style="background:#087f5b"></i>Batterie-SOC</label></div><canvas id="chart" role="img" aria-describedby="historySummary"></canvas><p id="historySummary" class="sr-only">Verlauf wird geladen.</p><div id="empty" class="empty" hidden>Noch keine Messpunkte vorhanden. Der erste Punkt wird nach einer erfolgreichen Modbus-Abfrage angelegt.</div></section>
+<section class="card"><h2>Tagesberichte</h2><div class="scroll"><table><caption class="sr-only">Energieauswertung je Kalendertag</caption><thead><tr><th scope="col">Datum</th><th scope="col">PV</th><th scope="col">Verbrauch</th><th scope="col">Bezug</th><th scope="col">Einspeisung</th><th scope="col">Akku geladen</th><th scope="col">Akku entladen</th><th scope="col">Autarkie</th><th scope="col">Eigenverbrauch</th><th scope="col">SOC Ende</th><th scope="col">Abdeckung</th></tr></thead><tbody id="reportRows"></tbody><tfoot id="reportTotal"></tfoot></table></div></section></main>
 <script>
 let data=null;const defs=[{key:'pv',name:'PV',color:'#18a66a',axis:'power'},{key:'load',name:'Verbrauch',color:'#d9a400',axis:'power'},{key:'export',name:'Einspeisung',color:'#d63b8c',axis:'power'},{key:'import',name:'Netzbezug',color:'#d04a3a',axis:'power'},{key:'battery',name:'Batterieleistung',color:'#2673c9',axis:'power'},{key:'soc',name:'SOC',color:'#087f5b',axis:'soc'}];
-const enabled=k=>document.querySelector('[data-key="'+k+'"]').checked,fmtW=v=>Number.isFinite(v)?Math.round(v).toLocaleString('de-DE')+' W':'—',fmtSoc=v=>Number.isFinite(v)?v.toFixed(1)+' %':'—';
-const renderMetrics=points=>{const p=points.length?points[points.length-1]:null,items=[['PV',p&&p.pv,'w'],['Verbrauch',p&&p.load,'w'],['Einspeisung',p&&p.export,'w'],['Netzbezug',p&&p.import,'w'],['Batterieleistung',p&&p.battery,'w'],['Batterie-SOC',p&&p.soc,'soc']];document.querySelector('#historySummary').textContent=p?'Letzter Messpunkt '+p.time+': PV '+fmtW(p.pv)+', Verbrauch '+fmtW(p.load)+', Einspeisung '+fmtW(p.export)+', Netzbezug '+fmtW(p.import)+', Batterieleistung '+fmtW(p.battery)+', Batterie-SOC '+fmtSoc(p.soc)+'.':'Noch keine Messpunkte vorhanden.';document.querySelector('#metrics').innerHTML=items.map(x=>'<div class="metric"><span>'+x[0]+'</span><b>'+(x[2]==='soc'?fmtSoc(x[1]):fmtW(x[1]))+'</b></div>').join('')};
-const draw=()=>{const points=data?.points||[],cv=document.querySelector('#chart'),empty=document.querySelector('#empty');renderMetrics(points);if(points.length<2){cv.hidden=true;empty.hidden=false;return}cv.hidden=false;empty.hidden=true;const dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;cv.width=w*dpr;cv.height=h*dpr;const c=cv.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);const active=defs.filter(x=>enabled(x.key)),powerValues=active.filter(x=>x.axis==='power').flatMap(x=>points.map(p=>p[x.key])).filter(Number.isFinite),powerMax=Math.max(1000,...powerValues),roundedMax=Math.ceil(powerMax/1000)*1000,left=58,right=48,top=30,bottom=55,plotW=w-left-right,plotH=h-top-bottom;c.font='11px system-ui';for(let i=0;i<=4;i++){const y=top+plotH*i/4;c.strokeStyle='#dfe4e8';c.beginPath();c.moveTo(left,y);c.lineTo(w-right,y);c.stroke();c.fillStyle='#64717d';c.textAlign='right';const watts=roundedMax*(1-i/4);c.fillText(watts>=1000?(watts/1000).toFixed(watts%1000?1:0)+' kW':Math.round(watts)+' W',left-6,y+4);c.textAlign='left';c.fillText(Math.round(100*(1-i/4))+' %',w-right+6,y+4)}const maxTicks=w<560?4:7,step=Math.max(1,Math.ceil((points.length-1)/(maxTicks-1))),ticks=[];for(let i=0;i<points.length;i+=step)ticks.push(i);if(ticks[ticks.length-1]!==points.length-1)ticks.push(points.length-1);ticks.forEach(i=>{const x=left+plotW*i/(points.length-1),parts=String(points[i].time).split(' ');c.strokeStyle='#edf0f2';c.beginPath();c.moveTo(x,top);c.lineTo(x,top+plotH);c.stroke();c.fillStyle='#64717d';c.textAlign=i===0?'left':i===points.length-1?'right':'center';c.fillText(parts[0]||'',x,top+plotH+18);c.fillText(parts.slice(1).join(' '),x,top+plotH+32)});active.forEach(s=>{c.strokeStyle=s.color;c.lineWidth=s.key==='soc'?2.5:2;c.beginPath();let started=false;points.forEach((p,i)=>{const v=p[s.key];if(!Number.isFinite(v)){started=false;return}const x=left+plotW*i/(points.length-1),ratio=s.axis==='soc'?v/100:v/roundedMax,y=top+plotH-Math.max(0,Math.min(1,ratio))*plotH;started?c.lineTo(x,y):c.moveTo(x,y);started=true});c.stroke()});c.textAlign='left';c.fillStyle='#64717d';c.fillText('Leistung',2,13);c.textAlign='right';c.fillText('SOC',w-2,13)};
-const load=async()=>{try{const hours=document.querySelector('#range').value,r=await fetch('/api/history?hours='+hours,{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);data=await r.json();const last=data.points.length?' · zuletzt '+data.points[data.points.length-1].time:'',used=data.storageTotal?' · Speicher '+Math.round(data.storageUsed/1024)+'/'+Math.round(data.storageTotal/1024)+' KB':'';document.querySelector('#status').textContent=data.points.length+' Punkte · '+data.intervalMinutes+'-Minuten-Darstellung'+last+used+' · '+(data.persistent?'dauerhaft gespeichert':'nur im RAM');draw()}catch(e){document.querySelector('#status').textContent='Fehler: '+e.message}};document.querySelector('#range').addEventListener('change',load);document.querySelectorAll('[data-key]').forEach(x=>x.addEventListener('change',draw));load();setInterval(load,60000);addEventListener('resize',draw);
+const finite=v=>v!==null&&v!==''&&Number.isFinite(Number(v)),enabled=k=>document.querySelector('[data-key="'+k+'"]').checked,fmtW=v=>finite(v)?Math.round(v).toLocaleString('de-DE')+' W':'—',fmtSoc=v=>finite(v)?Number(v).toFixed(1)+' %':'—',fmtKwh=v=>finite(v)?Number(v).toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2})+' kWh':'—',fmtPct=v=>finite(v)?Number(v).toFixed(1)+' %':'—',esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const metric=(name,value)=>`<div class="metric"><span>${name}</span><b>${value}</b></div>`;
+function renderEnergy(){const s=data?.summary||{},energy=[['PV-Erzeugung',fmtKwh(s.pvKwh)],['Hausverbrauch',fmtKwh(s.loadKwh)],['Netzbezug',fmtKwh(s.importKwh)],['Netzeinspeisung',fmtKwh(s.exportKwh)],['Batterie geladen',fmtKwh(s.batteryChargeKwh)],['Batterie entladen',fmtKwh(s.batteryDischargeKwh)],['Autarkiegrad',fmtPct(s.autonomyPercent)],['Eigenverbrauchsquote',fmtPct(s.selfConsumptionPercent)]];document.querySelector('#energyMetrics').innerHTML=energy.map(x=>metric(x[0],x[1])).join('');const quality=[['SOC Start / Ende',fmtSoc(s.socStart)+' / '+fmtSoc(s.socEnd)],['SOC Min. / Max.',fmtSoc(s.socMin)+' / '+fmtSoc(s.socMax)],['PV-Spitze',fmtW(s.peakPvW)],['Verbrauchsspitze',fmtW(s.peakLoadW)],['Einspeisespitze',fmtW(s.peakExportW)],['Bezugsspitze',fmtW(s.peakImportW)],['Datenabdeckung',fmtPct(s.coveragePercent)],['Messpunkte',`${s.completeSamples||0} / ${s.expectedSamples||0}`]];document.querySelector('#qualityMetrics').innerHTML=quality.map(x=>metric(x[0],x[1])).join('');const c=Number(s.coveragePercent)||0,h=document.querySelector('#coverageHint');h.className=c<90?'hint warn':'hint';h.textContent=c>=99.5?'Der gewählte Zeitraum ist vollständig aufgezeichnet.':`Der Bericht ist nur zu ${c.toFixed(1)} % vollständig. Summen beziehen sich ausschließlich auf vorhandene Messpunkte.`}
+function renderReports(){const days=data?.days||[],row=d=>{const x=d.energy||{};return `<tr><td>${esc(d.date)}</td><td>${fmtKwh(x.pvKwh)}</td><td>${fmtKwh(x.loadKwh)}</td><td>${fmtKwh(x.importKwh)}</td><td>${fmtKwh(x.exportKwh)}</td><td>${fmtKwh(x.batteryChargeKwh)}</td><td>${fmtKwh(x.batteryDischargeKwh)}</td><td>${fmtPct(x.autonomyPercent)}</td><td>${fmtPct(x.selfConsumptionPercent)}</td><td>${fmtSoc(x.socEnd)}</td><td>${fmtPct(x.coveragePercent)}</td></tr>`};document.querySelector('#reportRows').innerHTML=days.map(row).join('');const s=data?.summary||{};document.querySelector('#reportTotal').innerHTML=`<tr><td>Zeitraum gesamt</td><td>${fmtKwh(s.pvKwh)}</td><td>${fmtKwh(s.loadKwh)}</td><td>${fmtKwh(s.importKwh)}</td><td>${fmtKwh(s.exportKwh)}</td><td>${fmtKwh(s.batteryChargeKwh)}</td><td>${fmtKwh(s.batteryDischargeKwh)}</td><td>${fmtPct(s.autonomyPercent)}</td><td>${fmtPct(s.selfConsumptionPercent)}</td><td>${fmtSoc(s.socEnd)}</td><td>${fmtPct(s.coveragePercent)}</td></tr>`}
+function renderLatest(points){const p=points.length?points[points.length-1]:null,items=[['PV',p&&p.pv,'w'],['Verbrauch',p&&p.load,'w'],['Einspeisung',p&&p.export,'w'],['Netzbezug',p&&p.import,'w'],['Batterieleistung',p&&p.battery,'w'],['Batterie-SOC',p&&p.soc,'soc']];document.querySelector('#historySummary').textContent=p?'Letzter Messpunkt '+p.time+': PV '+fmtW(p.pv)+', Verbrauch '+fmtW(p.load)+', Einspeisung '+fmtW(p.export)+', Netzbezug '+fmtW(p.import)+', Batterieleistung '+fmtW(p.battery)+', Batterie-SOC '+fmtSoc(p.soc)+'. Energieauswertung: PV '+fmtKwh(data.summary?.pvKwh)+', Verbrauch '+fmtKwh(data.summary?.loadKwh)+', Datenabdeckung '+fmtPct(data.summary?.coveragePercent)+'.':'Noch keine Messpunkte vorhanden.';document.querySelector('#liveMetrics').innerHTML=items.map(x=>metric(x[0],x[2]==='soc'?fmtSoc(x[1]):fmtW(x[1]))).join('')}
+function draw(){const points=data?.points||[],cv=document.querySelector('#chart'),empty=document.querySelector('#empty');renderLatest(points);if(points.length<2){cv.hidden=true;empty.hidden=false;return}cv.hidden=false;empty.hidden=true;const dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;cv.width=w*dpr;cv.height=h*dpr;const c=cv.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);const active=defs.filter(x=>enabled(x.key)),powerValues=active.filter(x=>x.axis==='power').flatMap(x=>points.map(p=>p[x.key])).filter(Number.isFinite),powerMax=Math.max(1000,...powerValues),roundedMax=Math.ceil(powerMax/1000)*1000,left=58,right=48,top=30,bottom=55,plotW=w-left-right,plotH=h-top-bottom;c.font='11px system-ui';for(let i=0;i<=4;i++){const y=top+plotH*i/4;c.strokeStyle='#dfe4e8';c.beginPath();c.moveTo(left,y);c.lineTo(w-right,y);c.stroke();c.fillStyle='#64717d';c.textAlign='right';const watts=roundedMax*(1-i/4);c.fillText(watts>=1000?(watts/1000).toFixed(watts%1000?1:0)+' kW':Math.round(watts)+' W',left-6,y+4);c.textAlign='left';c.fillText(Math.round(100*(1-i/4))+' %',w-right+6,y+4)}const maxTicks=w<560?4:7,step=Math.max(1,Math.ceil((points.length-1)/(maxTicks-1))),ticks=[];for(let i=0;i<points.length;i+=step)ticks.push(i);if(ticks[ticks.length-1]!==points.length-1)ticks.push(points.length-1);ticks.forEach(i=>{const x=left+plotW*i/(points.length-1),parts=String(points[i].time).split(' ');c.strokeStyle='#edf0f2';c.beginPath();c.moveTo(x,top);c.lineTo(x,top+plotH);c.stroke();c.fillStyle='#64717d';c.textAlign=i===0?'left':i===points.length-1?'right':'center';c.fillText(parts[0]||'',x,top+plotH+18);c.fillText(parts.slice(1).join(' '),x,top+plotH+32)});active.forEach(s=>{c.strokeStyle=s.color;c.lineWidth=s.key==='soc'?2.5:2;c.beginPath();let started=false;points.forEach((p,i)=>{const v=p[s.key];if(!Number.isFinite(v)){started=false;return}const x=left+plotW*i/(points.length-1),ratio=s.axis==='soc'?v/100:v/roundedMax,y=top+plotH-Math.max(0,Math.min(1,ratio))*plotH;started?c.lineTo(x,y):c.moveTo(x,y);started=true});c.stroke()});c.textAlign='left';c.fillStyle='#64717d';c.fillText('Leistung',2,13);c.textAlign='right';c.fillText('SOC',w-2,13)}
+function csv(){if(!data)return;const head=['Datum','PV kWh','Verbrauch kWh','Netzbezug kWh','Einspeisung kWh','Batterie geladen kWh','Batterie entladen kWh','Autarkie %','Eigenverbrauch %','SOC Start %','SOC Ende %','SOC Minimum %','SOC Maximum %','Datenabdeckung %'],num=v=>finite(v)?String(Number(v).toFixed(3)).replace('.',','):'',lines=[head.join(';')];for(const d of data.days||[]){const x=d.energy||{};lines.push([d.date,num(x.pvKwh),num(x.loadKwh),num(x.importKwh),num(x.exportKwh),num(x.batteryChargeKwh),num(x.batteryDischargeKwh),num(x.autonomyPercent),num(x.selfConsumptionPercent),num(x.socStart),num(x.socEnd),num(x.socMin),num(x.socMax),num(x.coveragePercent)].join(';'))}const blob=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='Solar-Prognose-Monitor-Energiebericht-'+new Date().toISOString().slice(0,10)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
+async function load(){try{const hours=document.querySelector('#range').value,r=await fetch('/api/history?hours='+hours,{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);data=await r.json();const last=data.points.length?' · zuletzt '+data.points[data.points.length-1].time:'',used=data.storageTotal?' · Speicher '+Math.round(data.storageUsed/1024)+'/'+Math.round(data.storageTotal/1024)+' KB':'';document.querySelector('#status').textContent=data.points.length+' Grafikpunkte · '+data.intervalMinutes+'-Minuten-Darstellung'+last+used+' · '+(data.persistent?'dauerhaft gespeichert':'nur im RAM');renderEnergy();renderReports();draw()}catch(e){document.querySelector('#status').textContent='Fehler: '+e.message}}
+document.querySelector('#range').addEventListener('change',load);document.querySelector('#csv').addEventListener('click',csv);document.querySelectorAll('[data-key]').forEach(x=>x.addEventListener('change',draw));load();setInterval(load,60000);addEventListener('resize',draw);
 </script></body></html>
 )HTML";
 
@@ -7128,6 +7200,188 @@ void appendHistoryPowerJson(String &json, const char *name, int16_t decawatts) {
       : String(static_cast<int32_t>(decawatts) * 10L);
 }
 
+void resetHistoryEnergyStats(HistoryEnergyStats &stats) {
+  memset(&stats, 0, sizeof(stats));
+  stats.firstSocTenths = HISTORY_INVALID_SOC;
+  stats.lastSocTenths = HISTORY_INVALID_SOC;
+  stats.minimumSocTenths = HISTORY_INVALID_SOC;
+  stats.maximumSocTenths = HISTORY_INVALID_SOC;
+}
+
+uint32_t historyLocalDateKey(uint32_t epoch, char *date, size_t dateSize) {
+  tm parts = {};
+  const time_t value = static_cast<time_t>(epoch);
+  if (epoch == 0 || localtime_r(&value, &parts) == nullptr) return 0;
+  if (date != nullptr && dateSize >= 11) {
+    snprintf(date, dateSize, "%04d-%02d-%02d",
+             parts.tm_year + 1900, parts.tm_mon + 1, parts.tm_mday);
+  }
+  return static_cast<uint32_t>(parts.tm_year + 1900) * 10000UL
+       + static_cast<uint32_t>(parts.tm_mon + 1) * 100UL
+       + static_cast<uint32_t>(parts.tm_mday);
+}
+
+HistoryDailyReport *historyReportDayFor(uint32_t epoch) {
+  char date[11] = {};
+  const uint32_t key = historyLocalDateKey(epoch, date, sizeof(date));
+  if (key == 0) return nullptr;
+  for (size_t i = 0; i < historyReportDayCount; ++i) {
+    if (historyReportDays[i].dateKey == key) return &historyReportDays[i];
+  }
+  if (historyReportDayCount >= HISTORY_REPORT_DAY_COUNT) return nullptr;
+  HistoryDailyReport &day = historyReportDays[historyReportDayCount++];
+  memset(&day, 0, sizeof(day));
+  day.dateKey = key;
+  snprintf(day.date, sizeof(day.date), "%s", date);
+  resetHistoryEnergyStats(day.stats);
+  return &day;
+}
+
+void prepareHistoryEnergyReport(uint32_t oldestAllowed, uint32_t now) {
+  resetHistoryEnergyStats(historyReportTotal);
+  memset(historyReportDays, 0, sizeof(historyReportDays));
+  historyReportDayCount = 0;
+  if (now == 0 || oldestAllowed > now) return;
+  const uint32_t interval = ConfigDefaults::HISTORY_SAMPLE_SECONDS;
+  const uint32_t firstSlot = ((oldestAllowed + interval - 1UL) / interval) * interval;
+  const uint32_t lastSlot = (now / interval) * interval;
+  if (firstSlot > lastSlot) return;
+  for (uint32_t epoch = firstSlot; epoch <= lastSlot; epoch += interval) {
+    ++historyReportTotal.expectedSamples;
+    HistoryDailyReport *day = historyReportDayFor(epoch);
+    if (day != nullptr) ++day->stats.expectedSamples;
+    if (UINT32_MAX - epoch < interval) break;
+  }
+}
+
+void addHistoryEnergySample(HistoryEnergyStats &stats, const HistorySample &sample) {
+  ++stats.samples;
+  const int64_t seconds = ConfigDefaults::HISTORY_SAMPLE_SECONDS;
+  if (sample.pvDecawatts != HISTORY_INVALID_POWER) {
+    const int32_t watts = max<int32_t>(0, static_cast<int32_t>(sample.pvDecawatts) * 10L);
+    stats.pvWattSeconds += static_cast<int64_t>(watts) * seconds;
+    stats.peakPvWatts = max(stats.peakPvWatts, watts);
+    ++stats.pvSamples;
+  }
+  if (sample.loadDecawatts != HISTORY_INVALID_POWER) {
+    const int32_t watts = max<int32_t>(0, static_cast<int32_t>(sample.loadDecawatts) * 10L);
+    stats.loadWattSeconds += static_cast<int64_t>(watts) * seconds;
+    stats.peakLoadWatts = max(stats.peakLoadWatts, watts);
+    ++stats.loadSamples;
+  }
+  if (sample.gridDecawatts != HISTORY_INVALID_POWER) {
+    const int32_t watts = static_cast<int32_t>(sample.gridDecawatts) * 10L;
+    if (watts >= 0) {
+      stats.exportWattSeconds += static_cast<int64_t>(watts) * seconds;
+      stats.peakExportWatts = max(stats.peakExportWatts, watts);
+    } else {
+      const int32_t imported = -watts;
+      stats.importWattSeconds += static_cast<int64_t>(imported) * seconds;
+      stats.peakImportWatts = max(stats.peakImportWatts, imported);
+    }
+    ++stats.gridSamples;
+  }
+  if (sample.batteryDecawatts != HISTORY_INVALID_POWER) {
+    const int32_t watts = static_cast<int32_t>(sample.batteryDecawatts) * 10L;
+    if (watts >= 0) {
+      stats.batteryDischargeWattSeconds += static_cast<int64_t>(watts) * seconds;
+    } else {
+      stats.batteryChargeWattSeconds += static_cast<int64_t>(-watts) * seconds;
+    }
+    ++stats.batterySamples;
+  }
+  if (sample.socTenths != HISTORY_INVALID_SOC) {
+    if (stats.firstSocTenths == HISTORY_INVALID_SOC || sample.epoch < stats.firstSocEpoch) {
+      stats.firstSocTenths = sample.socTenths;
+      stats.firstSocEpoch = sample.epoch;
+    }
+    if (stats.lastSocTenths == HISTORY_INVALID_SOC || sample.epoch >= stats.lastSocEpoch) {
+      stats.lastSocTenths = sample.socTenths;
+      stats.lastSocEpoch = sample.epoch;
+    }
+    stats.minimumSocTenths = stats.minimumSocTenths == HISTORY_INVALID_SOC
+        ? sample.socTenths : min(stats.minimumSocTenths, sample.socTenths);
+    stats.maximumSocTenths = stats.maximumSocTenths == HISTORY_INVALID_SOC
+        ? sample.socTenths : max(stats.maximumSocTenths, sample.socTenths);
+    ++stats.socSamples;
+  }
+}
+
+void accumulateHistoryEnergyReport(const HistorySample &sample) {
+  addHistoryEnergySample(historyReportTotal, sample);
+  HistoryDailyReport *day = historyReportDayFor(sample.epoch);
+  if (day != nullptr) addHistoryEnergySample(day->stats, sample);
+}
+
+void appendHistoryEnergyValue(String &json, const char *name, int64_t wattSeconds,
+                              uint32_t samples) {
+  json += F("\"");
+  json += name;
+  json += F("\":");
+  json += samples == 0 ? F("null")
+      : String(static_cast<double>(wattSeconds) / 3600000.0, 3U);
+}
+
+void appendHistorySocValue(String &json, const char *name, uint16_t tenths) {
+  json += F(",\"");
+  json += name;
+  json += F("\":");
+  json += tenths == HISTORY_INVALID_SOC ? F("null") : String(tenths / 10.0f, 1U);
+}
+
+String historyEnergyStatsJson(const HistoryEnergyStats &stats) {
+  String json;
+  json.reserve(720);
+  json = '{';
+  appendHistoryEnergyValue(json, "pvKwh", stats.pvWattSeconds, stats.pvSamples);
+  json += ',';
+  appendHistoryEnergyValue(json, "loadKwh", stats.loadWattSeconds, stats.loadSamples);
+  json += ',';
+  appendHistoryEnergyValue(json, "exportKwh", stats.exportWattSeconds, stats.gridSamples);
+  json += ',';
+  appendHistoryEnergyValue(json, "importKwh", stats.importWattSeconds, stats.gridSamples);
+  json += ',';
+  appendHistoryEnergyValue(json, "batteryChargeKwh", stats.batteryChargeWattSeconds,
+                           stats.batterySamples);
+  json += ',';
+  appendHistoryEnergyValue(json, "batteryDischargeKwh", stats.batteryDischargeWattSeconds,
+                           stats.batterySamples);
+  const uint32_t completeSamples = min(min(stats.pvSamples, stats.loadSamples),
+                                       min(stats.gridSamples, stats.batterySamples));
+  const double coverage = stats.expectedSamples == 0 ? 0.0
+      : min(100.0, static_cast<double>(completeSamples) * 100.0 / stats.expectedSamples);
+  json += F(",\"coveragePercent\":"); json += String(coverage, 1U);
+  json += F(",\"samples\":"); json += String(stats.samples);
+  json += F(",\"completeSamples\":"); json += String(completeSamples);
+  json += F(",\"expectedSamples\":"); json += String(stats.expectedSamples);
+  appendHistorySocValue(json, "socStart", stats.firstSocTenths);
+  appendHistorySocValue(json, "socEnd", stats.lastSocTenths);
+  appendHistorySocValue(json, "socMin", stats.minimumSocTenths);
+  appendHistorySocValue(json, "socMax", stats.maximumSocTenths);
+  json += F(",\"peakPvW\":"); json += stats.pvSamples ? String(stats.peakPvWatts) : F("null");
+  json += F(",\"peakLoadW\":"); json += stats.loadSamples ? String(stats.peakLoadWatts) : F("null");
+  json += F(",\"peakExportW\":"); json += stats.gridSamples ? String(stats.peakExportWatts) : F("null");
+  json += F(",\"peakImportW\":"); json += stats.gridSamples ? String(stats.peakImportWatts) : F("null");
+  if (stats.pvSamples > 0 && stats.pvWattSeconds > 0) {
+    const double selfConsumption = constrain(
+        (static_cast<double>(stats.pvWattSeconds - stats.exportWattSeconds)
+         / stats.pvWattSeconds) * 100.0, 0.0, 100.0);
+    json += F(",\"selfConsumptionPercent\":"); json += String(selfConsumption, 1U);
+  } else {
+    json += F(",\"selfConsumptionPercent\":null");
+  }
+  if (stats.loadSamples > 0 && stats.loadWattSeconds > 0) {
+    const double autonomy = constrain(
+        (static_cast<double>(stats.loadWattSeconds - stats.importWattSeconds)
+         / stats.loadWattSeconds) * 100.0, 0.0, 100.0);
+    json += F(",\"autonomyPercent\":"); json += String(autonomy, 1U);
+  } else {
+    json += F(",\"autonomyPercent\":null");
+  }
+  json += '}';
+  return json;
+}
+
 void sendHistorySampleJson(const HistorySample &sample, bool &first) {
   String item;
   item.reserve(200);
@@ -7183,6 +7437,7 @@ void handleHistoryApi() {
   const uint32_t now = clockIsValid() ? static_cast<uint32_t>(time(nullptr)) : 0;
   const uint32_t oldestAllowed = now > static_cast<uint32_t>(hours) * 3600UL
       ? now - static_cast<uint32_t>(hours) * 3600UL : 0;
+  prepareHistoryEnergyReport(oldestAllowed, now);
   bool first = true;
   struct HistoryAccumulator {
     uint32_t bucket = 0;
@@ -7206,6 +7461,7 @@ void handleHistoryApi() {
 
   auto consumeSample = [&](const HistorySample &sample) {
     if (sample.epoch == 0 || sample.epoch < oldestAllowed || (now != 0 && sample.epoch > now + 300UL)) return;
+    accumulateHistoryEnergyReport(sample);
     const uint32_t bucket = sample.epoch - sample.epoch % bucketSeconds;
     if (aggregate.active && aggregate.bucket != bucket) flushAggregate();
     if (!aggregate.active) {
@@ -7244,6 +7500,20 @@ void handleHistoryApi() {
     }
   }
   flushAggregate();
+  sendChunk(F("],\"summary\":"));
+  sendChunk(historyEnergyStatsJson(historyReportTotal));
+  sendChunk(F(",\"days\":["));
+  for (size_t i = 0; i < historyReportDayCount; ++i) {
+    String day;
+    day.reserve(800);
+    if (i > 0) day += ',';
+    day += F("{\"date\":\"");
+    day += historyReportDays[i].date;
+    day += F("\",\"energy\":");
+    day += historyEnergyStatsJson(historyReportDays[i].stats);
+    day += '}';
+    sendChunk(day);
+  }
   sendChunk(F("]}"));
   sendChunk(String());
 }
@@ -7400,7 +7670,17 @@ void handleSupportReport() {
   report += F("\r\nDynamischer Tarif: "); report += config.tariffPlanningEnabled ? "Planung aktiv" : "deaktiviert";
   report += F("\r\nTarifstatus: "); report += tariff.status;
   report += F("\r\nMQTT: "); report += mqttStatus;
-  report += F("\r\nRundsteuerung: "); report += rippleStatus;
+  report += F("\r\nEinspeisebegrenzung: "); report += rippleStatus;
+  report += F("\r\nBetriebsart: ");
+  if (config.manualExportLimitEnabled) {
+    report += F("manuell (");
+    report += String(config.manualExportLimitPercent);
+    report += F(" %)");
+  } else {
+    report += config.rippleEnabled ? F("Rundsteuerempfänger") : F("aus");
+  }
+  report += F("\r\nInstallierte PV-Leistung: ");
+  report += String(configuredPvPeakWatts()) + " W";
   report += F("\r\n\r\nPasswörter, Tokens, API-Inhalte und JSON-Schaltbefehle wurden nicht ausgegeben.\r\n");
   addNoCacheHeaders();
   server.sendHeader("Content-Disposition", "attachment; filename=SPM-Supportbericht.txt");
@@ -7500,6 +7780,12 @@ void handleBackupDownload() {
   header.profileSize = sizeof(loadProfile);
   header.profileCrc = crc32Bytes(reinterpret_cast<const uint8_t *>(&loadProfile), sizeof(loadProfile));
   header.historyCount = historyCount;
+  // Seit 1.8.0 enthält das bisher reservierte Feld die manuelle Begrenzung.
+  // Bit 15 markiert das neue Format, Bit 8 die Betriebsart und Bit 0..6 den
+  // Prozentwert. Alte Sicherungen enthalten hier 0 und bleiben kompatibel.
+  header.reserved = 0x8000U
+      | (config.manualExportLimitEnabled ? 0x0100U : 0U)
+      | (static_cast<uint16_t>(config.manualExportLimitPercent) & 0x007FU);
   header.totalSize = totalSize;
   header.headerCrc = backupHeaderCrcFor(header);
 
@@ -7732,6 +8018,15 @@ bool applyStagedBackup(const BackupArchiveHeaderV1 &header, String &error) {
     return false;
   }
   applyBackupConfig(*snapshot);
+  if ((header.reserved & 0x8000U) != 0U) {
+    config.manualExportLimitEnabled = (header.reserved & 0x0100U) != 0U;
+    config.manualExportLimitPercent = static_cast<uint8_t>(header.reserved & 0x007FU);
+    config.manualExportLimitPercent = constrain(config.manualExportLimitPercent, 0, 100);
+    if (config.manualExportLimitEnabled) config.rippleEnabled = false;
+  } else {
+    config.manualExportLimitEnabled = false;
+    config.manualExportLimitPercent = 60;
+  }
   saveConfig();
   // Eine vor der Sicherung aktive Netzladung darf auf dem Zielgeraet niemals
   // aus einem alten NVS-Restzustand wiederaufgenommen werden.

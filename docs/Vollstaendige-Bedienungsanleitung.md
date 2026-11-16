@@ -1,6 +1,6 @@
 # Vollständige Bedienungsanleitung
 
-Stand: Firmware **1.7.0**
+Stand: Firmware **1.8.0**
 
 Diese Anleitung beschreibt jede Seite und jedes sichtbare Bedien- oder Anzeigefeld des Solar Prognose Monitors. Die mathematischen Hintergründe stehen bewusst gesammelt im letzten Kapitel. Die erste Geräteintegration unterstützt Sungrow-Wechselrichter und -Batteriespeicher.
 
@@ -56,7 +56,7 @@ Das Suchfeld filtert die Tabelle nach Adresse, englischem Namen, deutscher Besch
 | 13009 | Export power | Leistung am Netzanschlusspunkt in W; positive Werte werden als Einspeisung, negative als Netzbezug behandelt. |
 | 13029 | Grid state | Netzstatus aus Herstellerregister 13030: `0x55` Netzbetrieb, `0xAA` Inselbetrieb/Netzausfall. Optional, da nicht jeder Firmwarestand das Register bereitstellt. |
 | 13051 | Grid-side fault | 32-Bit-Netzfehler aus Herstellerregistern 13052–13053. Bit 8 meldet „Grid Power Outage“. Im Webinterface werden Outage-Bit und Rohwert hexadezimal angezeigt. |
-| 13073 | Export Power Limit | Aktuell gelesene maximale Einspeiseleistung. Im Text wird sie anhand der konfigurierten PV-Leistung zusätzlich in Prozent umgerechnet. |
+| 13073 | Export Power Limit | Aktuell gelesene maximale Einspeiseleistung. Im Text wird sie anhand der konfigurierten installierten PV-Leistung zusätzlich in Prozent umgerechnet. |
 | 13086 | Export Power Limitation | Zeigt, ob die Wechselrichterbegrenzung eingeschaltet (`0xAA`) oder ausgeschaltet (`0x55`) ist. |
 
 Ein Gedankenstrich bedeutet, dass noch kein frischer Wert vorliegt. „Nicht unterstützt“ bei 5746 oder 5748 bedeutet, dass das Smart Meter beziehungsweise die Weiterleitung über Unit-ID 254 die optionale Adresse abgewiesen hat; alle anderen Messwerte werden trotzdem weitergelesen.
@@ -137,12 +137,18 @@ Die Tabelle darunter enthält für jeden 15-Minuten-Block die Spalten **Zeit**, 
 
 Das Lernprofil wird mindestens stündlich und unmittelbar vor einem Browser-Firmwareupdate gespeichert. Ein normales Firmwareupdate erhält es. Beim ersten Start von Version 1.7 wird das bisherige Profilformat aus Version 1.6 automatisch erweitert, gespeichert und zurückgelesen. Auch eine portable Sicherung aus Version 1.6 kann wiederhergestellt und in das neue Format übernommen werden. Das Profil geht nur durch **Lernprofil löschen**, vollständiges Löschen des ESP32-Flashs oder ein zukünftig ausdrücklich inkompatibles Speicherformat verloren.
 
-## 8. Tab „Verlauf“
+## 8. Tab „Energie & Verlauf“
 
 | Zeile/Bedienung | Bedeutung |
 |---|---|
 | Ansicht | Wählt Tag (24 Stunden), Woche (7 Tage) oder Monat (31 Tage). |
+| Bericht als CSV | Lädt die sichtbaren Tagesberichte als semikolongetrennte UTF-8-Datei mit deutschem Dezimaltrennzeichen herunter. |
 | Status | Anzahl und zeitliche Auflösung der dargestellten Punkte, Zeitpunkt des letzten Punkts, Belegung der Verlaufspartition und Speicherstatus. |
+| Energieauswertung | Zeigt PV-Erzeugung, Hausverbrauch, Netzbezug, Netzeinspeisung, Batterie-Lade- und Entladeenergie für den gewählten Zeitraum. |
+| Autarkiegrad | Geschätzter Anteil des Hausverbrauchs, der nicht aus dem Netz bezogen wurde: `(Verbrauch − Netzbezug) / Verbrauch`. |
+| Eigenverbrauchsquote | Geschätzter Anteil der PV-Erzeugung, der nicht eingespeist wurde: `(PV − Einspeisung) / PV`. |
+| SOC- und Spitzenwerte | Zeigt SOC am Anfang und Ende, Minimum und Maximum sowie PV-, Verbrauchs-, Einspeise- und Bezugsspitze. |
+| Datenabdeckung | Verhältnis vollständig vorhandener Fünf-Minuten-Messpunkte zu den im gewählten Zeitraum erwarteten Punkten. Fehlende Zeiten werden nicht als null gerechnet. |
 | PV | Letzter PV-Leistungswert sowie grüne Kurve. |
 | Verbrauch | Letzter Hausverbrauch sowie gelbe Kurve. |
 | Einspeisung | Positiver Anteil des Netzanschlusspunktwerts sowie pinke Kurve. |
@@ -150,8 +156,11 @@ Das Lernprofil wird mindestens stündlich und unmittelbar vor einem Browser-Firm
 | Batterieleistung | Letzter Wert von Adresse 13021 sowie blaue Kurve. |
 | Batterie-SOC | Letzter direkter SOC 10743 sowie dunkelgrüne Kurve auf der rechten Prozentskala. |
 | Kontrollkästchen der Legende | Blendet die jeweilige Kurve ein oder aus, ohne Messwerte zu löschen. |
+| Tagesberichte | Gruppiert die Energieauswertung nach lokalem Kalendertag; in der letzten Zeile steht die Auswertung des gesamten gewählten Zeitraums. |
 
 Der Verlauf schreibt alle fünf Minuten einen kompakten Messpunkt in eine Tagesdatei der separaten LittleFS-Partition. Gespeichert werden bis zu 31 Tage. Die Tagesansicht verwendet 5-Minuten-Werte, die Wochenansicht bildet 15-Minuten-Mittelwerte und die Monatsansicht Stundenmittelwerte. Die X-Achse zeigt Datum und Uhrzeit. Fehlende Einzelwerte werden als Lücke dargestellt. Jeder neue Punkt wird geschrieben und direkt zurückgelesen; die Aufzeichnung läuft unabhängig von Prognose oder Bypass. Tagesdateien außerhalb der Aufbewahrungsfrist werden automatisch entfernt.
+
+Die Energieauswertung wird immer aus den unverdichteten Fünf-Minuten-Werten berechnet, auch wenn die Grafik für Woche oder Monat weniger Punkte zeigt. Für jeden vorhandenen Messpunkt gilt `Energie = Leistung × 5 Minuten`. Die daraus entstehenden kWh-Werte sind eine technische Näherung und kein Ersatz für einen geeichten Abrechnungszähler. Bei einer Datenabdeckung unter 100 % beziehen sich die Summen nur auf die tatsächlich vorhandenen Messzeiten.
 
 ## 9. Tab „Daten“
 
@@ -212,7 +221,7 @@ Vor der Wiederherstellung werden eine aktive dynamische Netzladung sicher beende
 |---|---|
 | Messwerte an einen MQTT-Broker senden | Aktiviert den ausschließlich sendenden MQTT-Client. |
 | Broker-IP oder Hostname | Adresse eines Brokers im vertrauenswürdigen lokalen Netzwerk. |
-| Broker-Port | Normalerweise 1883. TLS ist in Version 1.7.0 noch nicht enthalten. |
+| Broker-Port | Normalerweise 1883. TLS ist in Version 1.8.0 noch nicht enthalten. |
 | Sendeintervall | Abstand von 5 bis 3.600 Sekunden zwischen vollständigen Veröffentlichungen. |
 | Benutzername / Passwort | Optionale Broker-Anmeldung. Ein leeres Passwortfeld behält ein bereits gespeichertes Passwort. |
 | MQTT-Zugangsdaten löschen | Entfernt Benutzername und Passwort. |
@@ -274,17 +283,18 @@ Besonders wichtig ist dies beim Einbau oder bei der Inbetriebnahme zusätzlicher
 
 | Feld je Dachfläche | Wirkung |
 |---|---|
-| Aktiviert | Bezieht die Fläche in Wetterprognose und installierte Gesamtleistung der Rundsteuerung ein. |
+| Aktiviert | Bezieht die Fläche in die Wetterprognose ein. Ihre Leistung zählt außerdem zur Berechnungsgrundlage der manuellen und kontaktgesteuerten Einspeisebegrenzung. |
 | Name | Freie Bezeichnung, beispielsweise „Ost“, „West“ oder „Garage“. |
 | Installierte Leistung | Nennleistung dieser Fläche in kWp. |
 | Neigung | Modulneigung von 0 bis 90 Grad. |
 | Ausrichtung | Open-Meteo-Konvention: 0° Süd, −90° Ost, +90° West, ±180° Nord. |
 
-### Rundsteuerempfänger
+### Einspeisebegrenzung und Rundsteuerempfänger
 
 | Feld | Wirkung |
 |---|---|
-| Einspeisebegrenzung … aktivieren | Schaltet die automatische Auswertung insgesamt ein. Beim späteren Ausschalten wird Adresse 13086 einmal mit `0x55` deaktiviert und zurückgelesen. |
+| Betriebsart | **Aus** verwaltet kein aktives Limit, **Manuell** verwendet einen festen Prozentwert und **Rundsteuerempfänger** wertet die Kontakte aus. Die Betriebsarten schließen sich gegenseitig aus. Beim Wechsel auf Aus wird Adresse 13086 einmal mit `0x55` deaktiviert und zurückgelesen. |
+| Manuelle Begrenzung | Prozentwert von 0 bis 100, der nur in der Betriebsart Manuell wirkt. Beispielsweise ergeben 60 % bei 10 kWp einen Grenzwert von 6.000 W. |
 | Signalart: 3 Kontakte | Genau drei Eingänge müssen aktiviert sein. Kein aktiver Eingang wird nach zwei Sekunden als 100 % ausgewertet. Typische Kontakte sind beispielsweise 60 %, 30 % und 0 %. |
 | Signalart: 4 Kontakte | Genau vier Eingänge müssen aktiviert sein, darunter ein explizit auf 100 % eingestellter Eingang. Ohne aktiven Eingang verändert der ESP32 das zuletzt vorhandene Wechselrichterlimit nicht. |
 | Eingang aktiviert | Bezieht diese Zeile in die Kontaktabfrage ein. Die Zahl aktivierter Eingänge muss zur Signalart passen. |
@@ -582,18 +592,18 @@ Ausschaltschwelle
 
 Eine Stufe schaltet erst, wenn die entsprechende Bedingung zusätzlich für ihre Ein- oder Ausschaltverzögerung stabil war. Deaktivierte Nummern werden übersprungen und tragen nichts zur Summe bei.
 
-### 14.6 Rundsteuerempfänger und Exportlimit
+### 14.6 Manuelle Begrenzung, Rundsteuerempfänger und Exportlimit
 
 ```text
-installierte Gesamtleistung [W]
+installierte PV-Leistung [W]
   = Summe der kWp aller aktivierten Dachflächen × 1000
 
 Exportlimit [W]
-  = installierte Gesamtleistung [W]
+  = installierte PV-Leistung [W]
     × ausgewählte Prozentstufe / 100
 ```
 
-Beispiel: `10 kWp × 1000 × 60 / 100 = 6000 W`. Der Rohwert `6000` wird direkt an Adresse 13073 geschrieben. Das Register ist 16 Bit breit; deshalb darf die aktive installierte Gesamtleistung 65.535 W nicht überschreiten. Anschließend wird Adresse 13086 auf `0xAA` gesetzt. Beide Werte werden zurückgelesen.
+Beispiel: `10 kWp × 1000 × 60 / 100 = 6000 W`. Die 60 % können aus der manuellen Einstellung oder aus einem aktiven Rundsteuerkontakt stammen. Der Rohwert wird direkt an Adresse 13073 geschrieben. Das Register ist 16 Bit breit; berechnete Werte über 65.535 W werden deshalb abgewiesen. Anschließend wird Adresse 13086 auf `0xAA` gesetzt. Beide Werte werden zurückgelesen.
 
 Im 3-Kontakt-Modus gilt:
 

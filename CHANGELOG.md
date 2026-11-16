@@ -2,6 +2,19 @@
 
 ## Unveröffentlicht
 
+## 1.8.0 – 2026-11-16
+
+- erweitert den bisherigen Tab **Verlauf** zu **Energie & Verlauf**, ohne das vorhandene 31-Tage-Dateiformat zu verändern
+- berechnet PV-Erzeugung, Hausverbrauch, Netzbezug, Netzeinspeisung sowie Batterie-Lade- und Entladeenergie aus den originalen Fünf-Minuten-Messpunkten
+- zeigt Autarkiegrad, Eigenverbrauchsquote, SOC-Start/-Ende/-Minimum/-Maximum sowie Leistungs-Spitzenwerte für den gewählten Zeitraum
+- ergänzt Tagesberichte für die letzten 24 Stunden, sieben Tage oder 31 Tage einschließlich Gesamtsumme
+- weist die Datenabdeckung aus; fehlende Messzeiten werden nicht fälschlich als Nullverbrauch oder Nullerzeugung gewertet
+- bietet einen browserseitigen CSV-Export der Tagesberichte
+- ergänzt für die Einspeisebegrenzung die eindeutigen Betriebsarten **Aus**, **Manuell** und **Rundsteuerempfänger**
+- erlaubt im manuellen Betrieb einen festen Prozentwert, beispielsweise 60 %; daraus wird anhand der installierten PV-Leistung der Wattwert für Register 13073 berechnet, geschrieben und zurückgelesen
+- übernimmt die neue manuelle Prozentbegrenzung in portable Sicherungen, ohne ältere Sicherungen inkompatibel zu machen
+- bleibt mit rund 1,49 MB Programmspeicher auf der 4-MB-Partition nutzbar
+
 ## 1.7.0 – 2026-10-27
 
 - erweitert jeden 15-Minuten-Block um einen gleitenden Prognosefehler und eine daraus berechnete Verlässlichkeit
